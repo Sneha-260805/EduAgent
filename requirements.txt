@@ -1,0 +1,11 @@
+pandas
+numpy
+scikit-learn
+transformers
+datasets
+torch
+gradio
+groq
+matplotlib
+seaborn
+wordcloud
