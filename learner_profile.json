@@ -1,0 +1,12 @@
+{
+  "sessions": 4,
+  "questions_asked": 9,
+  "last_level": "beginner",
+  "topics_seen": [
+    "gradient descent",
+    "reinforcement learning",
+    "agentic AI",
+    "prompt engineering"
+  ],
+  "weak_areas": []
+}

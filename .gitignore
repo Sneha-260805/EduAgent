@@ -1,0 +1,12 @@
+# Ignore model files, logs, and results
+logs/
+results/
+difficulty_classifier/
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.tfevents.*
+__pycache__/
+*.pyc
+*.csv
