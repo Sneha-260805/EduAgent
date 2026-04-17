@@ -60,7 +60,23 @@ Optional (current terminal session):
 echo $env:GROQ_API_KEY
 ```
 
-## 5) Add Dataset File
+## 5) Download Pretrained Classifier (Recommended)
+
+If you only want to run the app (without retraining), download the pretrained model zip:
+
+- [difficulty_classifier.zip (Google Drive)](https://drive.google.com/file/d/1T75e4DaAuqyEhAnKc0wX2NpSI3jGpvhQ/view?usp=sharing)
+
+Then extract it in the project root so this path exists:
+
+- `./difficulty_classifier/`
+
+After extraction, you can run the app directly:
+
+```powershell
+python .\gradio_app.py
+```
+
+## 6) Add Dataset File (Only Needed For Retraining)
 
 Place your dataset at:
 
@@ -73,7 +89,7 @@ Expected columns include:
 - `level`
 - `topic`
 
-## 6) Prepare Training Dataset
+## 7) Prepare Training Dataset
 
 ```powershell
 python .\prepare_training_dataset.py
@@ -83,7 +99,7 @@ This generates:
 
 - `eduagent_training_ready.csv`
 
-## 7) Train Difficulty Classifier
+## 8) Train Difficulty Classifier
 
 ```powershell
 python .\train_classifier.py
@@ -95,7 +111,7 @@ This generates:
 - `logs/`
 - `results/`
 
-## 8) Run The Gradio App
+## 9) Run The Gradio App
 
 ```powershell
 python .\gradio_app.py
