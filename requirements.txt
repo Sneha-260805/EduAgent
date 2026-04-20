@@ -9,3 +9,4 @@ groq
 matplotlib
 seaborn
 wordcloud
+python-dotenv
