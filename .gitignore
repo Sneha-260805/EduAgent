@@ -10,3 +10,5 @@ difficulty_classifier/
 __pycache__/
 *.pyc
 *.csv
+.env
+eduagent.db

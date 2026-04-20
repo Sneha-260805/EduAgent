@@ -1,11 +1,17 @@
 import os
 import re
 import json
+import base64
+import hashlib
+import hmac
+import sqlite3
+from datetime import datetime
 import pandas as pd
 import torch
 import torch.nn.functional as F
 import gradio as gr
 from groq import Groq
+from dotenv import load_dotenv
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -13,13 +19,14 @@ from sklearn.metrics.pairwise import cosine_similarity
 # =========================================================
 # CONFIG
 # =========================================================
+load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
-    raise ValueError("Set GROQ_API_KEY in your environment before running this app.")
+    raise ValueError("Set GROQ_API_KEY in your environment or .env file before running this app.")
 MODEL_NAME = "llama-3.3-70b-versatile"
-PROFILE_FILE = "learner_profile.json"
 DATASET_FILE = "eduagent_dataset.csv"
 CLASSIFIER_PATH = "./difficulty_classifier"
+DB_FILE = "eduagent.db"
 
 client = Groq(api_key=GROQ_API_KEY)
 
@@ -75,24 +82,213 @@ def question_complexity_penalty(text):
     return penalty
 
 # =========================================================
-# MEMORY
+# AUTH + PROFILE STORAGE (SQLite)
 # =========================================================
-def load_profile():
-    if os.path.exists(PROFILE_FILE):
-        with open(PROFILE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+def get_conn():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
+def hash_password(password):
+    salt = os.urandom(16)
+    hashed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200000)
+    return base64.b64encode(salt + hashed).decode("utf-8")
+
+def verify_password(password, stored_hash):
+    try:
+        decoded = base64.b64decode(stored_hash.encode("utf-8"))
+    except Exception:
+        return False
+    if len(decoded) < 48:
+        return False
+    salt = decoded[:16]
+    stored = decoded[16:]
+    computed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200000)
+    return hmac.compare_digest(stored, computed)
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            username TEXT UNIQUE,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id INTEGER PRIMARY KEY,
+            sessions INTEGER NOT NULL DEFAULT 0,
+            questions_asked INTEGER NOT NULL DEFAULT 0,
+            last_level TEXT NOT NULL DEFAULT 'beginner',
+            topics_seen TEXT NOT NULL DEFAULT '[]',
+            question_history TEXT NOT NULL DEFAULT '[]',
+            topic_question_counts TEXT NOT NULL DEFAULT '{}',
+            weak_areas TEXT NOT NULL DEFAULT '[]',
+            recommended_next_topics TEXT NOT NULL DEFAULT '[]',
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+        """
+    )
+    cur.execute("PRAGMA table_info(user_profiles)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+    if "question_history" not in existing_cols:
+        cur.execute("ALTER TABLE user_profiles ADD COLUMN question_history TEXT NOT NULL DEFAULT '[]'")
+    if "topic_question_counts" not in existing_cols:
+        cur.execute("ALTER TABLE user_profiles ADD COLUMN topic_question_counts TEXT NOT NULL DEFAULT '{}'")
+    conn.commit()
+    conn.close()
+
+def default_profile():
     return {
         "sessions": 0,
         "questions_asked": 0,
         "last_level": "beginner",
         "topics_seen": [],
-        "weak_areas": []
+        "question_history": [],
+        "topic_question_counts": {},
+        "weak_areas": [],
+        "recommended_next_topics": [],
     }
 
-def save_profile(profile):
-    with open(PROFILE_FILE, "w", encoding="utf-8") as f:
-        json.dump(profile, f, indent=2)
+def create_profile_if_missing(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM user_profiles WHERE user_id = ?", (user_id,))
+    existing = cur.fetchone()
+    if not existing:
+        profile = default_profile()
+        cur.execute(
+            """
+            INSERT INTO user_profiles
+            (user_id, sessions, questions_asked, last_level, topics_seen, question_history, topic_question_counts, weak_areas, recommended_next_topics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                profile["sessions"],
+                profile["questions_asked"],
+                profile["last_level"],
+                json.dumps(profile["topics_seen"]),
+                json.dumps(profile["question_history"]),
+                json.dumps(profile["topic_question_counts"]),
+                json.dumps(profile["weak_areas"]),
+                json.dumps(profile["recommended_next_topics"]),
+            ),
+        )
+        conn.commit()
+    conn.close()
+
+def load_profile(user_id):
+    create_profile_if_missing(user_id)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return default_profile()
+    return {
+        "sessions": int(row["sessions"]),
+        "questions_asked": int(row["questions_asked"]),
+        "last_level": row["last_level"],
+        "topics_seen": json.loads(row["topics_seen"]) if row["topics_seen"] else [],
+        "question_history": json.loads(row["question_history"]) if row["question_history"] else [],
+        "topic_question_counts": json.loads(row["topic_question_counts"]) if row["topic_question_counts"] else {},
+        "weak_areas": json.loads(row["weak_areas"]) if row["weak_areas"] else [],
+        "recommended_next_topics": json.loads(row["recommended_next_topics"]) if row["recommended_next_topics"] else [],
+    }
+
+def save_profile(user_id, profile):
+    create_profile_if_missing(user_id)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE user_profiles
+        SET sessions = ?, questions_asked = ?, last_level = ?, topics_seen = ?, question_history = ?, topic_question_counts = ?, weak_areas = ?, recommended_next_topics = ?
+        WHERE user_id = ?
+        """,
+        (
+            profile["sessions"],
+            profile["questions_asked"],
+            profile["last_level"],
+            json.dumps(profile["topics_seen"]),
+            json.dumps(profile["question_history"]),
+            json.dumps(profile["topic_question_counts"]),
+            json.dumps(profile["weak_areas"]),
+            json.dumps(profile["recommended_next_topics"]),
+            user_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+def register_user(name, username, email, password):
+    name = (name or "").strip()
+    username = (username or "").strip().lower() or None
+    email = (email or "").strip().lower()
+    password = password or ""
+    if not name or not email or len(password) < 6:
+        return False, "Name, email, and password (min 6 chars) are required."
+
+    created_at = datetime.utcnow().isoformat() + "Z"
+    password_hash = hash_password(password)
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO users (name, username, email, password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, username, email, password_hash, created_at),
+        )
+        user_id = cur.lastrowid
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False, "Email or username already exists."
+    conn.close()
+    create_profile_if_missing(user_id)
+    return True, "Signup successful. Please log in."
+
+def authenticate_user(identifier, password):
+    identifier = (identifier or "").strip().lower()
+    password = password or ""
+    if not identifier or not password:
+        return None, "Enter email/username and password."
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT user_id, name, username, email, password_hash, created_at
+        FROM users
+        WHERE email = ? OR username = ?
+        """,
+        (identifier, identifier),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None, "Invalid credentials."
+    if not verify_password(password, row["password_hash"]):
+        return None, "Invalid credentials."
+    return {
+        "user_id": row["user_id"],
+        "name": row["name"],
+        "username": row["username"],
+        "email": row["email"],
+        "created_at": row["created_at"],
+    }, "Login successful."
 
 # =========================================================
 # CLASSIFIER
@@ -322,15 +518,77 @@ Return only the follow-up question.
     return response.choices[0].message.content.strip()
 
 # =========================================================
+# LEARNING PROFILE HELPERS
+# =========================================================
+def next_level(level):
+    order = ["beginner", "intermediate", "advanced"]
+    if level not in order:
+        return "intermediate"
+    idx = order.index(level)
+    return order[min(idx + 1, len(order) - 1)]
+
+def update_learning_signals(profile, user_question, detected_level, topic):
+    profile["questions_asked"] = int(profile.get("questions_asked", 0)) + 1
+    profile["last_level"] = detected_level
+
+    if topic and topic not in profile["topics_seen"]:
+        profile["topics_seen"].append(topic)
+
+    history = profile.get("question_history", [])
+    history.append({
+        "question": user_question.strip(),
+        "topic": topic or "unknown",
+        "level": detected_level,
+        "ts": datetime.utcnow().isoformat() + "Z",
+    })
+    profile["question_history"] = history[-50:]
+
+    topic_counts = profile.get("topic_question_counts", {})
+    if topic:
+        topic_counts[topic] = int(topic_counts.get(topic, 0)) + 1
+    profile["topic_question_counts"] = topic_counts
+
+    # Weak areas: frequently revisited topics (>=2 asks), top 3.
+    weak = [t for t, c in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True) if c >= 2]
+    profile["weak_areas"] = weak[:3]
+
+    # Recommended next: weak areas at next level first, then unseen topics.
+    nxt = next_level(detected_level)
+    level_topics = sorted(
+        df[df["level"].astype(str).str.lower() == nxt]["topic"].dropna().astype(str).unique().tolist()
+    )
+    level_topics_lc = {t.lower(): t for t in level_topics}
+
+    recommendations = []
+    for w in profile["weak_areas"]:
+        key = str(w).lower()
+        if key in level_topics_lc and level_topics_lc[key] not in recommendations:
+            recommendations.append(level_topics_lc[key])
+
+    seen_lc = {str(t).lower() for t in profile.get("topics_seen", [])}
+    for t in level_topics:
+        if t.lower() not in seen_lc and t not in recommendations:
+            recommendations.append(t)
+        if len(recommendations) >= 5:
+            break
+
+    profile["recommended_next_topics"] = recommendations
+    return profile
+
+# =========================================================
 # UI HELPERS
 # =========================================================
 def profile_to_markdown(profile):
+    recent_q = profile.get("question_history", [])[-3:]
+    recent_text = "\n".join([f"- {q['question']}" for q in reversed(recent_q)]) if recent_q else "None"
     return (
         f"**Sessions:** {profile['sessions']}\n\n"
         f"**Questions Asked:** {profile['questions_asked']}\n\n"
         f"**Last Level:** {profile['last_level']}\n\n"
         f"**Topics Seen:** {', '.join(profile['topics_seen']) if profile['topics_seen'] else 'None'}\n\n"
-        f"**Weak Areas:** {', '.join(profile['weak_areas']) if profile['weak_areas'] else 'None'}"
+        f"**Weak Areas:** {', '.join(profile['weak_areas']) if profile['weak_areas'] else 'None'}\n\n"
+        f"**Recommended Next Topics:** {', '.join(profile['recommended_next_topics']) if profile['recommended_next_topics'] else 'None'}\n\n"
+        f"**Recent Questions:**\n{recent_text}"
     )
 
 def confidence_to_text(conf):
@@ -343,18 +601,83 @@ def confidence_to_text(conf):
 # =========================================================
 # APP FUNCTIONS
 # =========================================================
-def start_session():
-    profile = load_profile()
-    profile["sessions"] += 1
-    save_profile(profile)
-    return profile_to_markdown(profile), []
+def user_welcome(user):
+    if not user:
+        return "Not logged in."
+    return f"Logged in as **{user['name']}** ({user['email']})"
 
-def ask_eduagent(user_question, chat_history):
+def handle_signup(name, username, email, password):
+    ok, msg = register_user(name, username, email, password)
+    if ok:
+        return msg, "", "", "", ""
+    return msg, name, username, email, ""
+
+def handle_login(identifier, password):
+    user, msg = authenticate_user(identifier, password)
+    if not user:
+        return (
+            msg,
+            None,
+            "",
+            [],
+            [],
+            "",
+            "",
+            "",
+            "",
+            gr.update(visible=True),
+            gr.update(visible=False),
+        )
+
+    profile = load_profile(user["user_id"])
+    profile["sessions"] += 1
+    save_profile(user["user_id"], profile)
+    return (
+        msg,
+        user,
+        user_welcome(user),
+        [],
+        [],
+        "",
+        "",
+        "",
+        profile_to_markdown(profile),
+        gr.update(visible=False),
+        gr.update(visible=True),
+    )
+
+def handle_logout():
+    return (
+        "Logged out.",
+        None,
+        "",
+        [],
+        [],
+        "",
+        "",
+        "",
+        "",
+        gr.update(visible=True),
+        gr.update(visible=False),
+    )
+
+def ask_eduagent(user_question, chat_history, user):
     if chat_history is None:
         chat_history = []
+    if not user:
+        return (
+            chat_history,
+            chat_history,
+            "Please login first.",
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
 
     if not user_question or not user_question.strip():
-        profile = load_profile()
+        profile = load_profile(user["user_id"])
         return (
             chat_history,   # chatbot
             chat_history,   # state
@@ -366,16 +689,18 @@ def ask_eduagent(user_question, chat_history):
             ""
         )
 
-    profile = load_profile()
+    profile = load_profile(user["user_id"])
 
     level, confidence, topic, examples, answer = generate_tutor_response(user_question)
     followup = generate_followup_question(user_question, answer, level)
 
-    profile["questions_asked"] += 1
-    profile["last_level"] = level
-    if topic and topic not in profile["topics_seen"]:
-        profile["topics_seen"].append(topic)
-    save_profile(profile)
+    profile = update_learning_signals(
+        profile=profile,
+        user_question=user_question,
+        detected_level=level,
+        topic=topic,
+    )
+    save_profile(user["user_id"], profile)
 
     bot_reply = (
         f"**Answer:**\n{answer}\n\n"
@@ -399,8 +724,7 @@ def ask_eduagent(user_question, chat_history):
     )
 
 def clear_chat():
-    profile = load_profile()
-    return [], [], "", "", "", "", profile_to_markdown(profile), ""
+    return [], [], "", "", "", "", "", ""
 
 # =========================================================
 # UI
@@ -428,41 +752,81 @@ with gr.Blocks() as demo:
         <div class="main-title">EduAgent — Adaptive AI Tutor</div>
         <div class="sub-title">Learner-aware tutoring with difficulty detection, topic retrieval, memory, and comprehension checking</div>
     """)
-
-    with gr.Row():
-        with gr.Column(scale=3):
-            chatbot = gr.Chatbot(label="Tutor Conversation", height=500)
-            user_input = gr.Textbox(
-                label="Ask your AI/ML question",
-                placeholder="Example: What is reinforcement learning?",
-                lines=3
-            )
-
-            with gr.Row():
-                ask_btn = gr.Button("Ask EduAgent", variant="primary")
-                clear_btn = gr.Button("Clear Chat")
-
-        with gr.Column(scale=2):
-            level_box = gr.Textbox(label="Detected Level", interactive=False)
-            conf_box = gr.Textbox(label="Confidence Scores", interactive=False)
-            topic_box = gr.Textbox(label="Detected Topic", interactive=False)
-            followup_box = gr.Textbox(label="Check Your Understanding", lines=4, interactive=False)
-
-            profile_md = gr.Markdown()
-            with gr.Accordion("Retrieved Examples", open=False):
-                examples_md = gr.Markdown()
-
+    auth_status = gr.Markdown("")
+    user_state = gr.State(None)
     state = gr.State([])
 
-    demo.load(
-        fn=start_session,
+    with gr.Column(visible=True) as auth_section:
+        with gr.Tab("Login"):
+            login_identifier = gr.Textbox(label="Email or Username")
+            login_password = gr.Textbox(label="Password", type="password")
+            login_btn = gr.Button("Login", variant="primary")
+
+        with gr.Tab("Signup"):
+            signup_name = gr.Textbox(label="Full Name")
+            signup_username = gr.Textbox(label="Username (optional)")
+            signup_email = gr.Textbox(label="Email")
+            signup_password = gr.Textbox(label="Password (min 6 chars)", type="password")
+            signup_btn = gr.Button("Create Account")
+
+    with gr.Column(visible=False) as app_section:
+        welcome_md = gr.Markdown("")
+        logout_btn = gr.Button("Logout")
+
+        with gr.Row():
+            with gr.Column(scale=3):
+                chatbot = gr.Chatbot(label="Tutor Conversation", height=500)
+                user_input = gr.Textbox(
+                    label="Ask your AI/ML question",
+                    placeholder="Example: What is reinforcement learning?",
+                    lines=3
+                )
+
+                with gr.Row():
+                    ask_btn = gr.Button("Ask EduAgent", variant="primary")
+                    clear_btn = gr.Button("Clear Chat")
+
+            with gr.Column(scale=2):
+                level_box = gr.Textbox(label="Detected Level", interactive=False)
+                conf_box = gr.Textbox(label="Confidence Scores", interactive=False)
+                topic_box = gr.Textbox(label="Detected Topic", interactive=False)
+                followup_box = gr.Textbox(label="Check Your Understanding", lines=4, interactive=False)
+
+                profile_md = gr.Markdown()
+                with gr.Accordion("Retrieved Examples", open=False):
+                    examples_md = gr.Markdown()
+
+    signup_btn.click(
+        fn=handle_signup,
+        inputs=[signup_name, signup_username, signup_email, signup_password],
+        outputs=[auth_status, signup_name, signup_username, signup_email, signup_password],
+    )
+
+    login_btn.click(
+        fn=handle_login,
+        inputs=[login_identifier, login_password],
+        outputs=[
+            auth_status, user_state, welcome_md, chatbot, state, level_box, conf_box, topic_box,
+            profile_md, auth_section, app_section
+        ],
+    ).then(
+        fn=lambda: ("", ""),
         inputs=None,
-        outputs=[profile_md, state]
+        outputs=[login_identifier, login_password],
+    )
+
+    logout_btn.click(
+        fn=handle_logout,
+        inputs=None,
+        outputs=[
+            auth_status, user_state, welcome_md, chatbot, state, level_box, conf_box, topic_box,
+            profile_md, auth_section, app_section
+        ],
     )
 
     ask_btn.click(
         fn=ask_eduagent,
-        inputs=[user_input, state],
+        inputs=[user_input, state, user_state],
         outputs=[chatbot, state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md]
     ).then(
         fn=lambda: "",
@@ -472,7 +836,7 @@ with gr.Blocks() as demo:
 
     user_input.submit(
         fn=ask_eduagent,
-        inputs=[user_input, state],
+        inputs=[user_input, state, user_state],
         outputs=[chatbot, state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md]
     ).then(
         fn=lambda: "",
@@ -487,4 +851,5 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
+    init_db()
     demo.launch(css=custom_css, theme=gr.themes.Soft())
