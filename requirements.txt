@@ -10,3 +10,5 @@ matplotlib
 seaborn
 wordcloud
 python-dotenv
+passlib
+pymongo

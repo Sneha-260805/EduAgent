@@ -12,6 +12,10 @@ import torch.nn.functional as F
 import gradio as gr
 from groq import Groq
 from dotenv import load_dotenv
+from passlib.context import CryptContext
+from passlib.exc import UnknownHashError
+from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -27,6 +31,9 @@ MODEL_NAME = "llama-3.3-70b-versatile"
 DATASET_FILE = "eduagent_dataset.csv"
 CLASSIFIER_PATH = "./difficulty_classifier"
 DB_FILE = "eduagent.db"
+MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "eduagent").strip()
+USE_MONGODB = bool(MONGODB_URI)
 
 client = Groq(api_key=GROQ_API_KEY)
 
@@ -82,21 +89,25 @@ def question_complexity_penalty(text):
     return penalty
 
 # =========================================================
-# AUTH + PROFILE STORAGE (SQLite)
+# AUTH + PROFILE STORAGE
 # =========================================================
 def get_conn():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
-def hash_password(password):
-    salt = os.urandom(16)
-    hashed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200000)
-    return base64.b64encode(salt + hashed).decode("utf-8")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+mongo_client = None
+mongo_db = None
+users_collection = None
+profiles_collection = None
 
-def verify_password(password, stored_hash):
+def hash_password(password):
+    return pwd_context.hash(password)
+
+def verify_legacy_password(password, stored_hash):
     try:
-        decoded = base64.b64decode(stored_hash.encode("utf-8"))
+        decoded = base64.b64decode((stored_hash or "").encode("utf-8"))
     except Exception:
         return False
     if len(decoded) < 48:
@@ -106,7 +117,40 @@ def verify_password(password, stored_hash):
     computed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200000)
     return hmac.compare_digest(stored, computed)
 
+def verify_password(password, stored_hash):
+    try:
+        return pwd_context.verify(password, stored_hash)
+    except UnknownHashError:
+        # Backward compatibility for accounts created before passlib migration.
+        return verify_legacy_password(password, stored_hash)
+
+def profile_from_doc(doc):
+    if not doc:
+        return default_profile()
+    return {
+        "sessions": int(doc.get("sessions", 0)),
+        "questions_asked": int(doc.get("questions_asked", 0)),
+        "last_level": doc.get("last_level", "beginner"),
+        "topics_seen": doc.get("topics_seen", []),
+        "question_history": doc.get("question_history", []),
+        "topic_question_counts": doc.get("topic_question_counts", {}),
+        "weak_areas": doc.get("weak_areas", []),
+        "recommended_next_topics": doc.get("recommended_next_topics", []),
+    }
+
 def init_db():
+    global mongo_client, mongo_db, users_collection, profiles_collection
+    if USE_MONGODB:
+        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        mongo_db = mongo_client[MONGODB_DB_NAME]
+        users_collection = mongo_db["users"]
+        profiles_collection = mongo_db["user_profiles"]
+        mongo_client.admin.command("ping")
+        users_collection.create_index("email", unique=True)
+        users_collection.create_index("username", unique=True, sparse=True)
+        profiles_collection.create_index("user_id", unique=True)
+        return
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
@@ -159,6 +203,25 @@ def default_profile():
     }
 
 def create_profile_if_missing(user_id):
+    if USE_MONGODB:
+        existing = profiles_collection.find_one({"user_id": user_id}, {"_id": 1})
+        if not existing:
+            profile = default_profile()
+            profiles_collection.insert_one(
+                {
+                    "user_id": user_id,
+                    "sessions": profile["sessions"],
+                    "questions_asked": profile["questions_asked"],
+                    "last_level": profile["last_level"],
+                    "topics_seen": profile["topics_seen"],
+                    "question_history": profile["question_history"],
+                    "topic_question_counts": profile["topic_question_counts"],
+                    "weak_areas": profile["weak_areas"],
+                    "recommended_next_topics": profile["recommended_next_topics"],
+                }
+            )
+        return
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT user_id FROM user_profiles WHERE user_id = ?", (user_id,))
@@ -188,6 +251,10 @@ def create_profile_if_missing(user_id):
 
 def load_profile(user_id):
     create_profile_if_missing(user_id)
+    if USE_MONGODB:
+        doc = profiles_collection.find_one({"user_id": user_id})
+        return profile_from_doc(doc)
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,))
@@ -208,6 +275,24 @@ def load_profile(user_id):
 
 def save_profile(user_id, profile):
     create_profile_if_missing(user_id)
+    if USE_MONGODB:
+        profiles_collection.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "sessions": profile["sessions"],
+                    "questions_asked": profile["questions_asked"],
+                    "last_level": profile["last_level"],
+                    "topics_seen": profile["topics_seen"],
+                    "question_history": profile["question_history"],
+                    "topic_question_counts": profile["topic_question_counts"],
+                    "weak_areas": profile["weak_areas"],
+                    "recommended_next_topics": profile["recommended_next_topics"],
+                }
+            },
+        )
+        return
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
@@ -241,6 +326,25 @@ def register_user(name, username, email, password):
 
     created_at = datetime.utcnow().isoformat() + "Z"
     password_hash = hash_password(password)
+    if USE_MONGODB:
+        try:
+            max_doc = users_collection.find_one(sort=[("user_id", -1)], projection={"user_id": 1})
+            next_user_id = 1 if not max_doc else int(max_doc["user_id"]) + 1
+            users_collection.insert_one(
+                {
+                    "user_id": next_user_id,
+                    "name": name,
+                    "username": username,
+                    "email": email,
+                    "password_hash": password_hash,
+                    "created_at": created_at,
+                }
+            )
+        except DuplicateKeyError:
+            return False, "Email or username already exists."
+        create_profile_if_missing(next_user_id)
+        return True, "Signup successful. Please log in."
+
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -266,28 +370,54 @@ def authenticate_user(identifier, password):
     if not identifier or not password:
         return None, "Enter email/username and password."
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT user_id, name, username, email, password_hash, created_at
-        FROM users
-        WHERE email = ? OR username = ?
-        """,
-        (identifier, identifier),
-    )
-    row = cur.fetchone()
-    conn.close()
+    if USE_MONGODB:
+        row = users_collection.find_one({"$or": [{"email": identifier}, {"username": identifier}]})
+    else:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT user_id, name, username, email, password_hash, created_at
+            FROM users
+            WHERE email = ? OR username = ?
+            """,
+            (identifier, identifier),
+        )
+        row = cur.fetchone()
+        conn.close()
     if not row:
         return None, "Invalid credentials."
-    if not verify_password(password, row["password_hash"]):
+    password_hash = row["password_hash"] if not USE_MONGODB else row.get("password_hash")
+    if not verify_password(password, password_hash):
         return None, "Invalid credentials."
+    # One-time upgrade: if legacy hash is used, replace with passlib hash.
+    if not pwd_context.identify(password_hash):
+        upgraded_hash = hash_password(password)
+        if USE_MONGODB:
+            users_collection.update_one(
+                {"user_id": row.get("user_id")},
+                {"$set": {"password_hash": upgraded_hash}},
+            )
+        else:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET password_hash = ? WHERE user_id = ?",
+                (upgraded_hash, row["user_id"]),
+            )
+            conn.commit()
+            conn.close()
+    user_id = row["user_id"] if not USE_MONGODB else row.get("user_id")
+    name = row["name"] if not USE_MONGODB else row.get("name")
+    username = row["username"] if not USE_MONGODB else row.get("username")
+    email = row["email"] if not USE_MONGODB else row.get("email")
+    created_at = row["created_at"] if not USE_MONGODB else row.get("created_at")
     return {
-        "user_id": row["user_id"],
-        "name": row["name"],
-        "username": row["username"],
-        "email": row["email"],
-        "created_at": row["created_at"],
+        "user_id": user_id,
+        "name": name,
+        "username": username,
+        "email": email,
+        "created_at": created_at,
     }, "Login successful."
 
 # =========================================================
