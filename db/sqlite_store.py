@@ -45,5 +45,9 @@ def init_db():
         cur.execute("ALTER TABLE user_profiles ADD COLUMN question_history TEXT NOT NULL DEFAULT '[]'")
     if "topic_question_counts" not in existing_cols:
         cur.execute("ALTER TABLE user_profiles ADD COLUMN topic_question_counts TEXT NOT NULL DEFAULT '{}'")
+    if "weak_areas" not in existing_cols:
+        cur.execute("ALTER TABLE user_profiles ADD COLUMN weak_areas TEXT NOT NULL DEFAULT '[]'")
+    if "recommended_next_topics" not in existing_cols:
+        cur.execute("ALTER TABLE user_profiles ADD COLUMN recommended_next_topics TEXT NOT NULL DEFAULT '[]'")
     conn.commit()
     conn.close()

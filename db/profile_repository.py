@@ -55,15 +55,16 @@ def load_profile(user_id):
     conn.close()
     if not row:
         return default_profile()
+    row_keys = set(row.keys())
     return {
         "sessions": int(row["sessions"]),
         "questions_asked": int(row["questions_asked"]),
         "last_level": row["last_level"],
         "topics_seen": json.loads(row["topics_seen"]) if row["topics_seen"] else [],
-        "question_history": json.loads(row["question_history"]) if row["question_history"] else [],
-        "topic_question_counts": json.loads(row["topic_question_counts"]) if row["topic_question_counts"] else {},
-        "weak_areas": json.loads(row["weak_areas"]) if row["weak_areas"] else [],
-        "recommended_next_topics": json.loads(row["recommended_next_topics"]) if row["recommended_next_topics"] else [],
+        "question_history": json.loads(row["question_history"]) if "question_history" in row_keys and row["question_history"] else [],
+        "topic_question_counts": json.loads(row["topic_question_counts"]) if "topic_question_counts" in row_keys and row["topic_question_counts"] else {},
+        "weak_areas": json.loads(row["weak_areas"]) if "weak_areas" in row_keys and row["weak_areas"] else [],
+        "recommended_next_topics": json.loads(row["recommended_next_topics"]) if "recommended_next_topics" in row_keys and row["recommended_next_topics"] else [],
     }
 
 
