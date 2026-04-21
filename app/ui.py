@@ -20,7 +20,14 @@ CUSTOM_CSS = """
 """
 
 
-def build_demo(handle_signup, handle_login, handle_logout, ask_eduagent, clear_chat):
+def build_demo(
+    handle_signup,
+    handle_login,
+    handle_logout,
+    ask_eduagent,
+    clear_chat,
+    handle_followup_reply=None,
+):
     with gr.Blocks(theme=gr.themes.Soft(), css=CUSTOM_CSS) as demo:
         gr.HTML(
             """
@@ -31,6 +38,7 @@ def build_demo(handle_signup, handle_login, handle_logout, ask_eduagent, clear_c
         auth_status = gr.Markdown("")
         user_state = gr.State(None)
         state = gr.State([])
+        followup_context_state = gr.State(None)
 
         with gr.Column(visible=True) as auth_section:
             with gr.Tab("Login"):
@@ -66,6 +74,14 @@ def build_demo(handle_signup, handle_login, handle_logout, ask_eduagent, clear_c
                     conf_box = gr.Textbox(label="Confidence Scores", interactive=False)
                     topic_box = gr.Textbox(label="Detected Topic", interactive=False)
                     followup_box = gr.Textbox(label="Check Your Understanding", lines=4, interactive=False)
+                    followup_reply = gr.Textbox(
+                        label="Your Follow-up Answer",
+                        placeholder="Write your answer to the follow-up question here...",
+                        lines=3,
+                    )
+                    eval_btn = gr.Button("Evaluate Follow-up")
+                    evaluation_md = gr.Markdown()
+                    eval_status = gr.Markdown("")
                     profile_md = gr.Markdown()
                     with gr.Accordion("Retrieved Examples", open=False):
                         examples_md = gr.Markdown()
@@ -97,18 +113,147 @@ def build_demo(handle_signup, handle_login, handle_logout, ask_eduagent, clear_c
         ask_btn.click(
             fn=ask_eduagent,
             inputs=[user_input, state, user_state],
-            outputs=[chatbot, state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md],
+            outputs=[chatbot, state, followup_context_state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md],
         ).then(fn=lambda: "", inputs=None, outputs=[user_input])
 
         user_input.submit(
             fn=ask_eduagent,
             inputs=[user_input, state, user_state],
-            outputs=[chatbot, state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md],
+            outputs=[chatbot, state, followup_context_state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md],
         ).then(fn=lambda: "", inputs=None, outputs=[user_input])
+
+        if handle_followup_reply is not None:
+            eval_btn.click(
+                fn=handle_followup_reply,
+                inputs=[user_state, followup_context_state, followup_reply],
+                outputs=[evaluation_md, profile_md, eval_status],
+            ).then(fn=lambda: "", inputs=None, outputs=[followup_reply])
 
         clear_btn.click(
             fn=clear_chat,
             inputs=None,
-            outputs=[chatbot, state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md],
+            outputs=[chatbot, state, followup_context_state, level_box, conf_box, topic_box, followup_box, profile_md, examples_md],
+        ).then(fn=lambda: ("", ""), inputs=None, outputs=[followup_reply, eval_status])
+    return demo
+
+
+def build_ui(
+    handle_signup,
+    handle_login,
+    handle_logout,
+    handle_question,
+    handle_followup_reply,
+    clear_chat_and_followup,
+):
+    """
+    UI builder expected by app.main handlers.
+    """
+    with gr.Blocks(theme=gr.themes.Soft(), css=CUSTOM_CSS) as demo:
+        gr.HTML(
+            """
+            <div class="main-title">EduAgent — Adaptive AI Tutor</div>
+            <div class="sub-title">Learner-aware tutoring with difficulty detection, retrieval, and follow-up evaluation</div>
+            """
         )
+        auth_status = gr.Markdown("")
+        user_state = gr.State(None)
+        logged_in = gr.State(False)
+        chat_state = gr.State([])
+        followup_context = gr.State(None)
+
+        with gr.Column(visible=True) as auth_section:
+            signup_name = gr.Textbox(label="Full Name")
+            signup_email = gr.Textbox(label="Email")
+            signup_password = gr.Textbox(label="Password", type="password")
+            signup_btn = gr.Button("Create Account")
+
+            login_email = gr.Textbox(label="Login Email")
+            login_password = gr.Textbox(label="Login Password", type="password")
+            login_btn = gr.Button("Login", variant="primary")
+
+        with gr.Column(visible=False) as app_section:
+            welcome_md = gr.Markdown("")
+            logout_btn = gr.Button("Logout")
+
+            chatbot = gr.Chatbot(label="Tutor Conversation", height=420)
+            user_input = gr.Textbox(label="Ask your AI/ML question", lines=3)
+            ask_btn = gr.Button("Ask EduAgent", variant="primary")
+
+            followup_reply = gr.Textbox(label="Reply to follow-up question", lines=3)
+            eval_btn = gr.Button("Evaluate Reply")
+
+            clear_btn = gr.Button("Clear Chat")
+
+            level_box = gr.Textbox(label="Detected Level", interactive=False)
+            conf_box = gr.Textbox(label="Confidence Scores", interactive=False)
+            topic_box = gr.Textbox(label="Detected Topic", interactive=False)
+            answer_box = gr.Textbox(label="Tutor Answer", lines=6, interactive=False)
+            followup_box = gr.Textbox(label="Follow-up Question", lines=3, interactive=False)
+            examples_md = gr.Markdown()
+            profile_md = gr.Markdown()
+            evaluation_md = gr.Markdown()
+            status_box = gr.Markdown()
+
+        signup_btn.click(
+            fn=handle_signup,
+            inputs=[signup_name, signup_email, signup_password],
+            outputs=[auth_status],
+        )
+
+        login_btn.click(
+            fn=handle_login,
+            inputs=[login_email, login_password],
+            outputs=[logged_in, user_state, welcome_md, profile_md, auth_status],
+        ).then(
+            fn=lambda is_logged_in: (gr.update(visible=not is_logged_in), gr.update(visible=is_logged_in)),
+            inputs=[logged_in],
+            outputs=[auth_section, app_section],
+        )
+
+        logout_btn.click(
+            fn=handle_logout,
+            inputs=None,
+            outputs=[logged_in, user_state, welcome_md, profile_md, auth_status],
+        ).then(
+            fn=lambda: (gr.update(visible=True), gr.update(visible=False), [], None, "", "", "", "", "", "", ""),
+            inputs=None,
+            outputs=[auth_section, app_section, chatbot, followup_context, level_box, conf_box, topic_box, answer_box, followup_box, examples_md, evaluation_md],
+        )
+
+        ask_btn.click(
+            fn=handle_question,
+            inputs=[user_state, chat_state, user_input],
+            outputs=[
+                chatbot, followup_context, level_box, conf_box, topic_box, answer_box,
+                followup_box, examples_md, profile_md, evaluation_md, status_box
+            ],
+        ).then(
+            fn=lambda chat: (chat, ""),
+            inputs=[chatbot],
+            outputs=[chat_state, user_input],
+        )
+
+        eval_btn.click(
+            fn=handle_followup_reply,
+            inputs=[user_state, followup_context, followup_reply],
+            outputs=[evaluation_md, profile_md, status_box],
+        ).then(
+            fn=lambda: "",
+            inputs=None,
+            outputs=[followup_reply],
+        )
+
+        clear_btn.click(
+            fn=clear_chat_and_followup,
+            inputs=[user_state],
+            outputs=[
+                chatbot, followup_context, level_box, conf_box, topic_box, answer_box,
+                followup_box, examples_md, profile_md, evaluation_md, status_box
+            ],
+        ).then(
+            fn=lambda chat: chat,
+            inputs=[chatbot],
+            outputs=[chat_state],
+        )
+
     return demo

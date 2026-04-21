@@ -35,3 +35,25 @@ def authenticate_user(identifier, password):
         "email": row["email"],
         "created_at": row["created_at"],
     }, "Login successful."
+
+
+def signup_user(name, email, password):
+    """
+    Backward-compatible wrapper used by app.main.
+    """
+    return register_user(name=name, username=None, email=email, password=password)
+
+
+def login_user(email, password):
+    """
+    Backward-compatible wrapper used by app.main.
+    Returns: success(bool), message(str), user(dict|None)
+    """
+    user, message = authenticate_user(identifier=email, password=password)
+    if not user:
+        return False, message, None
+    return True, message, {
+        "id": user["user_id"],
+        "name": user["name"],
+        "email": user["email"],
+    }
