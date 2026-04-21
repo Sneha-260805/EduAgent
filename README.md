@@ -2,11 +2,41 @@
 
 EduAgent is an adaptive AI tutor for AI/ML questions. It predicts user difficulty level (beginner/intermediate/advanced), retrieves relevant examples, and generates responses using Groq LLMs.
 
+The app has been refactored into focused modules while keeping behavior compatible with the previous single-file `gradio_app.py` flow.
+
 ## What Is Included In This Repo
 
 - Source code (`*.py`)
 - Visualization outputs (`graph*.png`)
 - Project config (`.gitignore`)
+
+## Refactored Project Structure
+
+```text
+EduAgent/
+  gradio_app.py                # thin launcher / compatibility entry point
+  app/
+    main.py                    # app orchestration and handlers
+    ui.py                      # Gradio layout + event wiring
+  agents/
+    tutor_agent.py             # tutor response generation
+    evaluator_agent.py         # follow-up question generation
+    memory_agent.py            # learner memory updates and hints
+  ml/
+    classifier.py              # DistilBERT level prediction
+    topic_detector.py          # topic detection
+    retriever.py               # example retrieval
+    prompts.py                 # LLM prompt templates
+  auth/
+    password_utils.py          # hash/verify password
+    auth_service.py            # signup/login service
+  db/
+    sqlite_store.py            # SQLite connection and init
+    profile_repository.py      # user/profile persistence
+    mongo_store.py             # placeholder (not wired by default)
+  config/
+    settings.py                # env/config constants
+```
 
 ## What Is Not Included (Generated / Large Files)
 
@@ -119,6 +149,27 @@ python .\gradio_app.py
 
 Open the local URL shown in terminal (usually `http://127.0.0.1:7860`).
 
+Alternative run path:
+
+```powershell
+python .\app\main.py
+```
+
+## Refactor Validation Commands
+
+Use these commands to quickly verify the refactored module layout is import-safe:
+
+```powershell
+python -m compileall config auth db ml agents app gradio_app.py
+```
+
+Optional smoke tests:
+
+```powershell
+python .\test_classifier.py
+python .\pipeline_test.py
+```
+
 ## Optional Scripts
 
 - Analyze dataset:
@@ -133,6 +184,12 @@ python .\analyze_dataset.py
 python .\eduagent_full.py
 ```
 
+- Legacy example retriever script:
+
+```powershell
+python .\example_retriever.py
+```
+
 ## Common Issues
 
 - **`GROQ_API_KEY` missing**  
@@ -143,4 +200,7 @@ python .\eduagent_full.py
 
 - **Missing dataset/model files**  
   Ensure `eduagent_dataset.csv` exists, then run prepare + train steps above.
+
+- **Login/profile errors after pulling changes**  
+  Ensure `eduagent.db` is writable and rerun `python .\gradio_app.py` so DB init can create/update tables.
 
