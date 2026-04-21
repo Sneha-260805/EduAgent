@@ -28,12 +28,11 @@ def authenticate_user(identifier, password):
         return None, "Invalid credentials."
     if not verify_password(password, row["password_hash"]):
         return None, "Invalid credentials."
+    user_id = row["id"] if "id" in row.keys() else row["user_id"]
     return {
-        "user_id": row["user_id"],
+        "user_id": user_id,
         "name": row["name"],
-        "username": row["username"],
         "email": row["email"],
-        "created_at": row["created_at"],
     }, "Login successful."
 
 

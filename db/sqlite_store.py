@@ -1,53 +1,71 @@
 import sqlite3
+from pathlib import Path
+
 from config.settings import DB_FILE
 
 
-def get_conn():
+def get_db_connection():
+    """
+    Return a SQLite connection with row access by column name.
+    """
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
+    """
+    Initialize the SQLite database.
+
+    Tables:
+    - users
+    - profiles
+
+    Complex profile fields are stored as JSON strings.
+    """
+    db_path = Path(DB_FILE)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # -----------------------------
+    # users table
+    # -----------------------------
+    cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            username TEXT UNIQUE,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL
         )
         """
     )
-    cur.execute(
+
+    # -----------------------------
+    # profiles table
+    # -----------------------------
+    cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS user_profiles (
+        CREATE TABLE IF NOT EXISTS profiles (
             user_id INTEGER PRIMARY KEY,
-            sessions INTEGER NOT NULL DEFAULT 0,
-            questions_asked INTEGER NOT NULL DEFAULT 0,
-            last_level TEXT NOT NULL DEFAULT 'beginner',
-            topics_seen TEXT NOT NULL DEFAULT '[]',
-            question_history TEXT NOT NULL DEFAULT '[]',
-            topic_question_counts TEXT NOT NULL DEFAULT '{}',
-            weak_areas TEXT NOT NULL DEFAULT '[]',
-            recommended_next_topics TEXT NOT NULL DEFAULT '[]',
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
+            sessions INTEGER DEFAULT 0,
+            questions_asked INTEGER DEFAULT 0,
+            last_level TEXT DEFAULT 'beginner',
+
+            topics_seen TEXT DEFAULT '[]',
+            level_history TEXT DEFAULT '[]',
+            topic_counts TEXT DEFAULT '{}',
+            weak_areas TEXT DEFAULT '{}',
+            mastery TEXT DEFAULT '{}',
+            used_explanations TEXT DEFAULT '{}',
+            recommended_next_topics TEXT DEFAULT '[]',
+
+            FOREIGN KEY(user_id) REFERENCES users(id)
         )
         """
     )
-    cur.execute("PRAGMA table_info(user_profiles)")
-    existing_cols = {row[1] for row in cur.fetchall()}
-    if "question_history" not in existing_cols:
-        cur.execute("ALTER TABLE user_profiles ADD COLUMN question_history TEXT NOT NULL DEFAULT '[]'")
-    if "topic_question_counts" not in existing_cols:
-        cur.execute("ALTER TABLE user_profiles ADD COLUMN topic_question_counts TEXT NOT NULL DEFAULT '{}'")
-    if "weak_areas" not in existing_cols:
-        cur.execute("ALTER TABLE user_profiles ADD COLUMN weak_areas TEXT NOT NULL DEFAULT '[]'")
-    if "recommended_next_topics" not in existing_cols:
-        cur.execute("ALTER TABLE user_profiles ADD COLUMN recommended_next_topics TEXT NOT NULL DEFAULT '[]'")
+
     conn.commit()
     conn.close()

@@ -3,6 +3,7 @@ import gradio as gr
 
 from auth.auth_service import signup_user, login_user
 from db.profile_repository import load_profile, save_profile
+from db.sqlite_store import init_db
 from agents.tutor_agent import generate_tutor_response
 from agents.evaluator_agent import (
     generate_followup_question,
@@ -321,6 +322,8 @@ def create_app():
     """
     Create the Gradio application.
     """
+    init_db()
+
     # Legacy UI compatibility wrappers: preserve the previous layout/flow.
     def handle_signup_legacy(name, username, email, password):
         _ = username  # legacy field retained in UI; not required by current auth service

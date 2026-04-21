@@ -1,206 +1,254 @@
 # EduAgent
 
-EduAgent is an adaptive AI tutor for AI/ML questions. It predicts user difficulty level (beginner/intermediate/advanced), retrieves relevant examples, and generates responses using Groq LLMs.
+EduAgent is an adaptive AI tutor for AI/ML learning. It combines:
 
-The app has been refactored into focused modules while keeping behavior compatible with the previous single-file `gradio_app.py` flow.
+- difficulty classification (`beginner`, `intermediate`, `advanced`)
+- topic detection + example retrieval from a dataset
+- tutor answer generation via Groq
+- evaluator-generated follow-up questions
+- learner memory/profile tracking for personalization
+- Gradio UI with login/signup and per-user progress
 
-## What Is Included In This Repo
+The codebase is modularized, with `gradio_app.py` kept as the compatibility launcher.
 
-- Source code (`*.py`)
-- Visualization outputs (`graph*.png`)
-- Project config (`.gitignore`)
+## Project Essence
 
-## Refactored Project Structure
+EduAgent aims to make explanations adapt to each learner:
+
+1. Understand learner intent and difficulty level.
+2. Ground responses with topic-matched examples from your dataset.
+3. Generate a tutor answer with level-appropriate depth.
+4. Ask a follow-up to check understanding.
+5. Update learner memory (topic counts, weak areas, mastery, recommendations).
+6. Use that memory in later prompts so repeated topics are handled better.
+
+---
+
+## Current Architecture
 
 ```text
 EduAgent/
-  gradio_app.py                # thin launcher / compatibility entry point
+  gradio_app.py                  # Launcher/entrypoint
   app/
-    main.py                    # app orchestration and handlers
-    ui.py                      # Gradio layout + event wiring
+    main.py                      # Orchestration, callbacks, flow wiring
+    ui.py                        # Gradio UI builders (legacy + evaluation-capable)
   agents/
-    tutor_agent.py             # tutor response generation
-    evaluator_agent.py         # follow-up question generation
-    memory_agent.py            # learner memory updates and hints
+    tutor_agent.py               # Tutor LLM answer pipeline
+    evaluator_agent.py           # Follow-up question + learner response evaluation
+    memory_agent.py              # Profile normalization, updates, memory hints
   ml/
-    classifier.py              # DistilBERT level prediction
-    topic_detector.py          # topic detection
-    retriever.py               # example retrieval
-    prompts.py                 # LLM prompt templates
+    classifier.py                # DistilBERT level prediction
+    topic_detector.py            # Topic detection from question + dataset
+    retriever.py                 # Example retrieval and scoring
+    prompts.py                   # Prompt templates (if used by older flow)
   auth/
-    password_utils.py          # hash/verify password
-    auth_service.py            # signup/login service
+    password_utils.py            # Password hash/verify
+    auth_service.py              # Signup/login services and wrappers
   db/
-    sqlite_store.py            # SQLite connection and init
-    profile_repository.py      # user/profile persistence
-    mongo_store.py             # placeholder (not wired by default)
+    sqlite_store.py              # SQLite connection and DB/table initialization
+    profile_repository.py        # User/profile persistence and schema-compatible access
+    mongo_store.py               # Placeholder for Mongo store integration
   config/
-    settings.py                # env/config constants
+    settings.py                  # Env/config constants
 ```
 
-## What Is Not Included (Generated / Large Files)
+---
 
-These are intentionally excluded from git and must be generated locally:
+## File Responsibilities (Detailed)
 
-- `eduagent_dataset.csv`
-- `eduagent_training_ready.csv`
-- `difficulty_classifier/`
-- `logs/`
-- `results/`
-- `__pycache__/`
+### `gradio_app.py`
+- Imports `create_app()` from `app/main.py`
+- Launches Gradio app
 
-## Prerequisites
+### `app/main.py`
+- Main callback orchestration for:
+  - signup/login/logout
+  - tutor question handling
+  - follow-up evaluation handling
+  - chat reset
+- Creates compatibility wrappers so the legacy UI layout remains usable
+- Calls `init_db()` during app creation so required tables exist before login
 
-- Python 3.10+ (3.13 works with current code)
+### `app/ui.py`
+- `build_demo(...)`: legacy two-column UI flow (login/signup + chatbot panel)
+- `build_ui(...)`: newer evaluator-explicit flow
+- Currently supports follow-up evaluation input in the legacy path via callback wiring
+
+### `agents/tutor_agent.py`
+- `generate_tutor_response(user_question, profile)`:
+  - predicts level via classifier
+  - detects topic via topic detector
+  - retrieves examples from dataset
+  - builds memory hint from profile
+  - sends combined prompt to Groq and returns final answer
+
+### `agents/evaluator_agent.py`
+- `generate_followup_question(...)`: generates one conceptual understanding-check question
+- `evaluate_followup_response(...)`: evaluates learner follow-up reply and returns structured JSON:
+  - `understanding_level`
+  - `weak_concepts`
+  - `feedback`
+  - `recommended_action`
+
+### `agents/memory_agent.py`
+- `ensure_profile_structure(...)`: normalizes old/new profile shapes and ensures all keys exist
+- `update_profile_after_question(...)`: updates question count, topics, level history
+- `update_profile_after_evaluation(...)`: updates mastery, weak areas, and recommendations
+- `build_memory_hint(...)`: creates personalization hint for tutor prompt
+
+### `ml/classifier.py`
+- Loads DistilBERT classifier from `difficulty_classifier/`
+- Predicts level + confidence scores with heuristic guardrails
+
+### `ml/topic_detector.py`
+- Text cleaning
+- Topic similarity scoring to detect most relevant topic for current learner question
+
+### `ml/retriever.py`
+- Loads dataset from `eduagent_dataset.csv`
+- Filters by level/topic and ranks examples using similarity + complexity penalty
+
+### `auth/password_utils.py`
+- Secure password hashing
+- Password verification
+
+### `auth/auth_service.py`
+- Signup and login service layer
+- Backward-compatible wrappers used by app callbacks (`signup_user`, `login_user`)
+- Converts auth result into UI-friendly user payload
+
+### `db/sqlite_store.py`
+- Opens SQLite connection
+- Creates `users` and `profiles` tables when missing (`init_db()`)
+
+### `db/profile_repository.py`
+- Profile CRUD (`load_profile`, `save_profile`, `create_profile_if_missing`)
+- User lookup/creation helpers used by auth
+- Supports compatibility across older/newer SQLite user table column shapes
+
+---
+
+## End-to-End Runtime Flow
+
+1. User logs in.
+2. App loads profile from SQLite and normalizes it.
+3. User asks question.
+4. Tutor agent returns answer + detected level/topic + examples.
+5. Memory agent updates profile after question.
+6. Evaluator agent generates follow-up question.
+7. User replies to follow-up.
+8. Evaluator agent scores understanding.
+9. Memory agent updates mastery/weak areas/recommendations.
+
+---
+
+## Setup
+
+### Prerequisites
+- Python 3.10+ (3.13 also works)
 - Git
 - Groq API key
 
-## 1) Clone And Enter Project
-
+### Clone
 ```powershell
 git clone https://github.com/Sneha-260805/EduAgent.git
 cd EduAgent
 ```
 
-## 2) Create Virtual Environment
-
+### Virtual environment
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-## 3) Install Dependencies
-
+### Install dependencies
 ```powershell
 pip install --upgrade pip
-pip install pandas numpy scikit-learn transformers datasets torch gradio groq matplotlib seaborn wordcloud
+pip install pandas numpy scikit-learn transformers datasets torch gradio groq python-dotenv matplotlib seaborn wordcloud
 ```
 
-## 4) Set Environment Variable
+### Configure environment
+Create `.env` in project root:
+```text
+GROQ_API_KEY=your_groq_api_key_here
+```
 
-Set your Groq key before running tutor/app scripts:
-
+Or set in current terminal:
 ```powershell
 $env:GROQ_API_KEY="your_groq_api_key_here"
 ```
 
-Optional (current terminal session):
+---
 
-```powershell
-echo $env:GROQ_API_KEY
-```
+## Model and Dataset Requirements
 
-## 5) Download Pretrained Classifier (Recommended)
+Required at runtime:
+- `difficulty_classifier/` (DistilBERT artifacts)
+- `eduagent_dataset.csv` with columns:
+  - `question`
+  - `answer`
+  - `level`
+  - `topic`
 
-If you only want to run the app (without retraining), download the pretrained model zip:
-
-- [difficulty_classifier.zip (Google Drive)](https://drive.google.com/file/d/1T75e4DaAuqyEhAnKc0wX2NpSI3jGpvhQ/view?usp=sharing)
-
-Then extract it in the project root so this path exists:
-
-- `./difficulty_classifier/`
-
-After extraction, you can run the app directly:
-
-```powershell
-python .\gradio_app.py
-```
-
-## 6) Add Dataset File (Only Needed For Retraining)
-
-Place your dataset at:
-
+Not committed by design:
 - `eduagent_dataset.csv`
-
-Expected columns include:
-
-- `question`
-- `answer`
-- `level`
-- `topic`
-
-## 7) Prepare Training Dataset
-
-```powershell
-python .\prepare_training_dataset.py
-```
-
-This generates:
-
 - `eduagent_training_ready.csv`
-
-## 8) Train Difficulty Classifier
-
-```powershell
-python .\train_classifier.py
-```
-
-This generates:
-
 - `difficulty_classifier/`
-- `logs/`
-- `results/`
+- `logs/`, `results/`, `__pycache__/`
 
-## 9) Run The Gradio App
+---
+
+## Run
 
 ```powershell
 python .\gradio_app.py
 ```
 
-Open the local URL shown in terminal (usually `http://127.0.0.1:7860`).
+Open the local URL shown in terminal (usually `http://127.0.0.1:7860` or `7861`).
 
-Alternative run path:
+---
 
-```powershell
-python .\app\main.py
-```
-
-## Refactor Validation Commands
-
-Use these commands to quickly verify the refactored module layout is import-safe:
+## Validation / Dev Checks
 
 ```powershell
 python -m compileall config auth db ml agents app gradio_app.py
 ```
 
-Optional smoke tests:
-
+Optional checks:
 ```powershell
 python .\test_classifier.py
 python .\pipeline_test.py
 ```
 
-## Optional Scripts
+---
 
-- Analyze dataset:
+## Common Issues and Fixes
+
+- **`GROQ_API_KEY` missing**
+  - Ensure `.env` exists or set the env variable in current shell.
+
+- **`no such table: profiles`**
+  - `init_db()` must run before login. Restart app with:
+    - `python .\gradio_app.py`
+
+- **`no such column: id` (or other users column mismatch)**
+  - Caused by old/new SQLite schema differences; repository/auth layer now includes compatibility logic.
+
+- **Follow-up response drifts off-topic**
+  - Ensure you answer in the dedicated follow-up evaluation field/button path so evaluator uses stored follow-up context.
+
+- **Gradio warning about theme/css in `Blocks(...)`**
+  - Warning is non-blocking; app still runs. (Gradio v6 moved these params to `launch()`.)
+
+---
+
+## Optional Scripts
 
 ```powershell
 python .\analyze_dataset.py
-```
-
-- Run CLI tutor:
-
-```powershell
+python .\prepare_training_dataset.py
+python .\train_classifier.py
 python .\eduagent_full.py
-```
-
-- Legacy example retriever script:
-
-```powershell
 python .\example_retriever.py
 ```
-
-## Common Issues
-
-- **`GROQ_API_KEY` missing**  
-  Set it again in the same terminal session before running scripts.
-
-- **Transformer/TensorFlow Keras errors**  
-  `train_classifier.py` already disables TensorFlow path via `USE_TF=0`.
-
-- **Missing dataset/model files**  
-  Ensure `eduagent_dataset.csv` exists, then run prepare + train steps above.
-
-- **Login/profile errors after pulling changes**  
-  Ensure `eduagent.db` is writable and rerun `python .\gradio_app.py` so DB init can create/update tables.
 
