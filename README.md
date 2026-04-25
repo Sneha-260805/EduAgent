@@ -1,220 +1,576 @@
 # EduAgent
 
-EduAgent is an adaptive AI tutor for AI/ML learning. It combines:
+EduAgent is an adaptive AI tutor for AI/ML learning. It is designed as a complete academic showcase project, not just a simple chatbot. The app combines authentication, difficulty classification, topic detection, example retrieval, tutor generation, follow-up evaluation, learner memory, progress charts, and a polished dark Gradio dashboard.
 
-- difficulty classification (`beginner`, `intermediate`, `advanced`)
-- topic detection + example retrieval from a dataset
-- tutor answer generation via Groq
-- evaluator-generated follow-up questions
-- learner memory/profile tracking for personalization
-- Gradio UI with login/signup and per-user progress
+The main goal is to demonstrate a full learning loop:
 
-The codebase is modularized, with `gradio_app.py` kept as the compatibility launcher.
-
-## Project Essence
-
-EduAgent aims to make explanations adapt to each learner:
-
-1. Understand learner intent and difficulty level.
-2. Ground responses with topic-matched examples from your dataset.
-3. Generate a tutor answer with level-appropriate depth.
-4. Ask a follow-up to check understanding.
-5. Update learner memory (topic counts, weak areas, mastery, recommendations).
-6. Use that memory in later prompts so repeated topics are handled better.
+1. A learner asks an AI/ML question.
+2. EduAgent predicts the learner's difficulty level.
+3. EduAgent detects the topic and retrieves relevant dataset examples.
+4. The Tutor Agent explains the concept at the right level.
+5. The Evaluator Agent asks a follow-up question.
+6. The learner answers the follow-up.
+7. The Memory Agent updates mastery, weak areas, topic history, and recommendations.
+8. The dashboard updates the learner profile and charts.
 
 ---
 
-## Current Architecture
+## Key Features
+
+- Login, signup, logout, and authenticated learner sessions
+- Per-user learner profile persistence with SQLite
+- Difficulty classification into beginner, intermediate, and advanced levels
+- Topic detection from learner questions
+- Dataset-backed example retrieval from `eduagent_dataset.csv`
+- Groq-powered Tutor Agent for level-aware explanations
+- Evaluator Agent for follow-up questions and understanding checks
+- Memory Agent for learner state, weak areas, mastery, and recommendations
+- Dark theme Gradio UI designed for a project demo or professor presentation
+- Two-column workspace with a chat area and organized learner dashboard
+- Tabbed dashboard sections to avoid clutter
+- Matplotlib progress charts with dark theme styling
+- System Insights / Research panel for showing internal AI pipeline signals
+
+---
+
+## Current UI
+
+EduAgent uses a dark, presentation-ready Gradio interface.
+
+### Login Page
+
+The login page includes:
+
+- A dark academic showcase hero section
+- Login and signup tabs
+- Clean authentication card
+- Project capability highlights
+- Consistent typography, spacing, and dark theme styling
+
+### Chat Page
+
+The chat page is organized into two main columns.
+
+Left column:
+
+- Tutor conversation
+- Main question input
+- Ask EduAgent button
+- Clear Chat button
+
+Right column:
+
+- A tabbed learner dashboard that keeps the page organized
+- Important learner state first
+- Research/debug information separated from learner-facing information
+
+Dashboard tabs:
+
+- `Overview`
+  - Detected level
+  - Detected topic
+  - Confidence scores
+  - Learner memory / progress summary
+
+- `Evaluate`
+  - Follow-up question
+  - Learner follow-up answer input
+  - Evaluate Follow-up button
+  - Evaluation result
+
+- `Progress`
+  - Mastery by Topic chart
+  - Topic Revisit Count chart
+  - Weak Concept Count by Topic chart
+
+- `Research`
+  - System Insights / Admin Panel
+  - Retrieved Examples
+  - Internal signals useful for demos and explainability
+
+---
+
+## System Insights
+
+System Insights is meant for demo, research, and professor-facing explanation. It is not required for normal learners, but it helps show that EduAgent is more than a chat interface.
+
+It displays internal pipeline values such as:
+
+- Predicted level
+- Confidence scores
+- Detected topic
+- Memory hint used by the Tutor Agent
+- Evaluator strategy hint
+- Last evaluation summary
+- Last evaluation JSON
+- Retrieved examples from the dataset
+
+This panel is placed under the `Research` dashboard tab so it stays available for presentations without cluttering the main learner experience.
+
+---
+
+## Charts
+
+EduAgent includes three progress charts using Matplotlib and `gr.Plot`.
+
+### Mastery by Topic
+
+Shows the learner's current mastery score for each topic. Mastery changes after follow-up evaluation.
+
+### Topic Revisit Count
+
+Shows how many times the learner has asked about or revisited each topic.
+
+### Weak Concept Count by Topic
+
+Shows how many weak concepts are tracked under each topic.
+
+If a chart has no data yet, EduAgent shows a clean dark placeholder instead of an empty or broken plot.
+
+---
+
+## Architecture
 
 ```text
 EduAgent/
-  gradio_app.py                  # Launcher/entrypoint
+  gradio_app.py
   app/
-    main.py                      # Orchestration, callbacks, flow wiring
-    ui.py                        # Gradio UI builders (legacy + evaluation-capable)
+    main.py
+    ui.py
   agents/
-    tutor_agent.py               # Tutor LLM answer pipeline
-    evaluator_agent.py           # Follow-up question + learner response evaluation
-    memory_agent.py              # Profile normalization, updates, memory hints
+    tutor_agent.py
+    evaluator_agent.py
+    memory_agent.py
   ml/
-    classifier.py                # DistilBERT level prediction
-    topic_detector.py            # Topic detection from question + dataset
-    retriever.py                 # Example retrieval and scoring
-    prompts.py                   # Prompt templates (if used by older flow)
+    classifier.py
+    topic_detector.py
+    retriever.py
+    prompts.py
   auth/
-    password_utils.py            # Password hash/verify
-    auth_service.py              # Signup/login services and wrappers
+    auth_service.py
+    password_utils.py
   db/
-    sqlite_store.py              # SQLite connection and DB/table initialization
-    profile_repository.py        # User/profile persistence and schema-compatible access
-    mongo_store.py               # Placeholder for Mongo store integration
+    sqlite_store.py
+    profile_repository.py
+    mongo_store.py
   config/
-    settings.py                  # Env/config constants
+    settings.py
+  eduagent_dataset.csv
+  difficulty_classifier/
+  requirements.txt
 ```
 
 ---
 
-## File Responsibilities (Detailed)
+## File Responsibilities
 
 ### `gradio_app.py`
-- Imports `create_app()` from `app/main.py`
-- Launches Gradio app
 
-### `app/main.py`
-- Main callback orchestration for:
-  - signup/login/logout
-  - tutor question handling
-  - follow-up evaluation handling
-  - chat reset
-- Creates compatibility wrappers so the legacy UI layout remains usable
-- Calls `init_db()` during app creation so required tables exist before login
+The app launcher.
+
+- Imports `create_app()` from `app/main.py`
+- Imports custom CSS from `app/ui.py`
+- Launches the Gradio app with the dark theme styling
 
 ### `app/ui.py`
-- `build_demo(...)`: legacy two-column UI flow (login/signup + chatbot panel)
-- `build_ui(...)`: newer evaluator-explicit flow
-- Currently supports follow-up evaluation input in the legacy path via callback wiring
+
+The UI layer.
+
+- Defines the custom dark CSS
+- Builds the login/signup page
+- Builds the two-column chat workspace
+- Organizes the learner dashboard into tabs
+- Defines UI components for:
+  - chat
+  - learner snapshot
+  - follow-up evaluation
+  - profile display
+  - charts
+  - system insights
+  - retrieved examples
+
+This file focuses on layout and presentation. It does not contain the tutoring backend logic.
+
+### `app/main.py`
+
+The orchestration and Gradio callback layer.
+
+Responsibilities:
+
+- Initializes the database
+- Handles signup, login, and logout callbacks
+- Handles main learner questions
+- Calls the Tutor Agent
+- Calls the Evaluator Agent
+- Updates learner memory
+- Formats profile display
+- Formats evaluation display
+- Builds progress charts
+- Builds System Insights markdown
+- Wires backend outputs into the UI components
 
 ### `agents/tutor_agent.py`
-- `generate_tutor_response(user_question, profile)`:
-  - predicts level via classifier
-  - detects topic via topic detector
-  - retrieves examples from dataset
-  - builds memory hint from profile
-  - sends combined prompt to Groq and returns final answer
+
+The Tutor Agent.
+
+Responsibilities:
+
+- Predicts the difficulty level for the learner question
+- Detects the topic
+- Retrieves relevant examples
+- Reads memory hints from the learner profile
+- Reads evaluator strategy hints from the most recent evaluation
+- Builds the tutor prompt
+- Calls Groq to generate the final answer
+
+The Tutor Agent adapts its explanation style based on:
+
+- predicted level
+- detected topic
+- prior topic history
+- mastery score
+- weak concepts
+- last evaluation result
 
 ### `agents/evaluator_agent.py`
-- `generate_followup_question(...)`: generates one conceptual understanding-check question
-- `evaluate_followup_response(...)`: evaluates learner follow-up reply and returns structured JSON:
+
+The Evaluator Agent.
+
+Responsibilities:
+
+- Generates one follow-up question after the tutor answer
+- Evaluates the learner's response to the follow-up
+- Returns structured evaluation data:
   - `understanding_level`
   - `weak_concepts`
   - `feedback`
   - `recommended_action`
 
+Expected understanding levels:
+
+- `good`
+- `partial`
+- `poor`
+
+Expected recommended actions:
+
+- `advance`
+- `re-explain`
+- `give easier example`
+- `give more practice`
+
 ### `agents/memory_agent.py`
-- `ensure_profile_structure(...)`: normalizes old/new profile shapes and ensures all keys exist
-- `update_profile_after_question(...)`: updates question count, topics, level history
-- `update_profile_after_evaluation(...)`: updates mastery, weak areas, and recommendations
-- `build_memory_hint(...)`: creates personalization hint for tutor prompt
+
+The Memory Agent.
+
+Responsibilities:
+
+- Normalizes learner profile shape
+- Tracks sessions and questions asked
+- Tracks topics seen
+- Tracks topic revisit counts
+- Tracks weak areas
+- Tracks mastery scores
+- Tracks recommended next topics
+- Stores the last evaluation
+- Builds tutor memory hints
+- Builds evaluator strategy hints
+
+This is the part that makes EduAgent adaptive across turns and sessions.
 
 ### `ml/classifier.py`
-- Loads DistilBERT classifier from `difficulty_classifier/`
-- Predicts level + confidence scores with heuristic guardrails
+
+Difficulty classification layer.
+
+Responsibilities:
+
+- Loads the trained classifier from `difficulty_classifier/`
+- Predicts the learner question level
+- Returns confidence scores
+- Applies guardrails for more reliable level prediction
 
 ### `ml/topic_detector.py`
-- Text cleaning
-- Topic similarity scoring to detect most relevant topic for current learner question
+
+Topic detection layer.
+
+Responsibilities:
+
+- Cleans and normalizes question text
+- Compares learner question with dataset topics
+- Returns the most relevant topic
 
 ### `ml/retriever.py`
-- Loads dataset from `eduagent_dataset.csv`
-- Filters by level/topic and ranks examples using similarity + complexity penalty
 
-### `auth/password_utils.py`
-- Secure password hashing
-- Password verification
+Dataset retrieval layer.
+
+Responsibilities:
+
+- Loads `eduagent_dataset.csv`
+- Filters by predicted level and detected topic
+- Ranks examples by relevance
+- Returns examples used as style/reference guidance for the tutor
 
 ### `auth/auth_service.py`
-- Signup and login service layer
-- Backward-compatible wrappers used by app callbacks (`signup_user`, `login_user`)
-- Converts auth result into UI-friendly user payload
+
+Authentication service layer.
+
+Responsibilities:
+
+- Handles signup
+- Handles login
+- Supports email/username based login flow
+- Wraps user payloads for Gradio callbacks
+
+### `auth/password_utils.py`
+
+Password utility layer.
+
+Responsibilities:
+
+- Hashes passwords
+- Verifies passwords securely
 
 ### `db/sqlite_store.py`
-- Opens SQLite connection
-- Creates `users` and `profiles` tables when missing (`init_db()`)
+
+SQLite setup layer.
+
+Responsibilities:
+
+- Opens database connections
+- Initializes `users` table
+- Initializes `profiles` table
+- Adds compatibility columns when missing
 
 ### `db/profile_repository.py`
-- Profile CRUD (`load_profile`, `save_profile`, `create_profile_if_missing`)
-- User lookup/creation helpers used by auth
-- Supports compatibility across older/newer SQLite user table column shapes
+
+Persistence repository layer.
+
+Responsibilities:
+
+- Creates users
+- Looks up users
+- Creates profiles if missing
+- Loads learner profiles
+- Saves learner profiles
+- Safely serializes/deserializes JSON profile fields
+
+---
+
+## Learner Profile Data
+
+Each learner profile stores:
+
+- `sessions`
+- `questions_asked`
+- `last_level`
+- `topics_seen`
+- `level_history`
+- `topic_counts`
+- `weak_areas`
+- `mastery`
+- `used_explanations`
+- `recommended_next_topics`
+- `last_evaluation`
+
+This profile is persisted per user and loaded again after login.
 
 ---
 
 ## End-to-End Runtime Flow
 
-1. User logs in.
-2. App loads profile from SQLite and normalizes it.
-3. User asks question.
-4. Tutor agent returns answer + detected level/topic + examples.
-5. Memory agent updates profile after question.
-6. Evaluator agent generates follow-up question.
-7. User replies to follow-up.
-8. Evaluator agent scores understanding.
-9. Memory agent updates mastery/weak areas/recommendations.
+### 1. Authentication
+
+The user signs up or logs in. EduAgent loads or creates a learner profile.
+
+### 2. Question Asking
+
+The learner asks an AI/ML question in the chat input.
+
+### 3. Classification
+
+The classifier predicts the learner level:
+
+- beginner
+- intermediate
+- advanced
+
+It also returns confidence scores.
+
+### 4. Topic Detection
+
+EduAgent detects the topic from the learner question.
+
+### 5. Retrieval
+
+Relevant examples are retrieved from `eduagent_dataset.csv`.
+
+### 6. Tutoring
+
+The Tutor Agent builds a prompt using:
+
+- learner question
+- predicted level
+- detected topic
+- retrieved examples
+- memory hint
+- evaluator strategy hint
+
+The generated answer is shown in the chat.
+
+### 7. Follow-up Question
+
+The Evaluator Agent generates a short conceptual follow-up question.
+
+### 8. Evaluation
+
+The learner answers the follow-up. The Evaluator Agent scores the response and returns feedback.
+
+### 9. Memory Update
+
+The Memory Agent updates:
+
+- topic counts
+- weak concepts
+- mastery score
+- recommendations
+- last evaluation
+
+### 10. Dashboard Update
+
+The UI refreshes:
+
+- learner snapshot
+- learner memory / progress
+- evaluation result
+- charts
+- system insights
 
 ---
 
-## Setup
+## Dataset Requirements
 
-### Prerequisites
-- Python 3.10+ (3.13 also works)
-- Git
-- Groq API key
+EduAgent expects `eduagent_dataset.csv` in the project root.
 
-### Clone
-```powershell
-git clone https://github.com/Sneha-260805/EduAgent.git
-cd EduAgent
+Required columns:
+
+```text
+question
+answer
+level
+topic
 ```
 
-### Virtual environment
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+Example row structure:
+
+```csv
+question,answer,level,topic
+"What is supervised learning?","Supervised learning is...",beginner,Machine Learning
 ```
 
-### Install dependencies
-```powershell
-pip install --upgrade pip
-pip install pandas numpy scikit-learn transformers datasets torch gradio groq python-dotenv matplotlib seaborn wordcloud
+The retrieval pipeline uses this dataset to find relevant examples for the tutor prompt.
+
+---
+
+## Model Requirements
+
+EduAgent expects the trained difficulty classifier artifacts in:
+
+```text
+difficulty_classifier/
 ```
 
-### Configure environment
-Create `.env` in project root:
+Typical files include:
+
+```text
+config.json
+model.safetensors
+tokenizer_config.json
+special_tokens_map.json
+vocab.txt
+```
+
+---
+
+## Environment Variables
+
+Create a `.env` file in the project root:
+
 ```text
 GROQ_API_KEY=your_groq_api_key_here
+MODEL_NAME=your_groq_model_name_here
 ```
 
-Or set in current terminal:
+If `MODEL_NAME` is already defined in `config/settings.py`, only `GROQ_API_KEY` may be required.
+
+You can also set the API key in PowerShell:
+
 ```powershell
 $env:GROQ_API_KEY="your_groq_api_key_here"
 ```
 
 ---
 
-## Model and Dataset Requirements
+## Setup
 
-Required at runtime:
-- `difficulty_classifier/` (DistilBERT artifacts)
-- `eduagent_dataset.csv` with columns:
-  - `question`
-  - `answer`
-  - `level`
-  - `topic`
+### 1. Clone
 
-Not committed by design:
-- `eduagent_dataset.csv`
-- `eduagent_training_ready.csv`
-- `difficulty_classifier/`
-- `logs/`, `results/`, `__pycache__/`
+```powershell
+git clone https://github.com/Sneha-260805/EduAgent.git
+cd EduAgent
+```
 
----
+### 2. Create Virtual Environment
 
-## Run
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### 3. Install Dependencies
+
+```powershell
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+If you prefer manual installation:
+
+```powershell
+pip install pandas numpy scikit-learn transformers datasets torch gradio groq matplotlib seaborn wordcloud python-dotenv passlib pymongo
+```
+
+### 4. Configure Environment
+
+Create `.env` and add your Groq API key.
+
+```text
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+### 5. Run the App
 
 ```powershell
 python .\gradio_app.py
 ```
 
-Open the local URL shown in terminal (usually `http://127.0.0.1:7860` or `7861`).
+Open the local URL printed by Gradio. It is usually:
+
+```text
+http://127.0.0.1:7860
+```
 
 ---
 
-## Validation / Dev Checks
+## Validation
+
+Run a syntax/build check:
 
 ```powershell
-python -m compileall config auth db ml agents app gradio_app.py
+python -c "from app.main import create_app; app = create_app(); print('app build ok')"
 ```
 
 Optional checks:
+
 ```powershell
 python .\test_classifier.py
 python .\pipeline_test.py
@@ -222,33 +578,82 @@ python .\pipeline_test.py
 
 ---
 
-## Common Issues and Fixes
+## Common Issues
 
-- **`GROQ_API_KEY` missing**
-  - Ensure `.env` exists or set the env variable in current shell.
+### Missing `GROQ_API_KEY`
 
-- **`no such table: profiles`**
-  - `init_db()` must run before login. Restart app with:
-    - `python .\gradio_app.py`
+Make sure `.env` exists or set the variable in the current shell.
 
-- **`no such column: id` (or other users column mismatch)**
-  - Caused by old/new SQLite schema differences; repository/auth layer now includes compatibility logic.
+### Dataset Not Found
 
-- **Follow-up response drifts off-topic**
-  - Ensure you answer in the dedicated follow-up evaluation field/button path so evaluator uses stored follow-up context.
+Make sure `eduagent_dataset.csv` is in the project root.
 
-- **Gradio warning about theme/css in `Blocks(...)`**
-  - Warning is non-blocking; app still runs. (Gradio v6 moved these params to `launch()`.)
+### Classifier Files Not Found
+
+Make sure the `difficulty_classifier/` folder exists and contains the trained model/tokenizer artifacts.
+
+### Empty Charts
+
+This is normal for a new learner profile. Charts populate after questions and follow-up evaluations.
+
+### No Follow-up Context
+
+Ask a main question first, then answer the generated follow-up question in the evaluation tab.
+
+### Login or Profile Issues
+
+Restart the app so `init_db()` runs and initializes the required SQLite tables.
 
 ---
 
-## Optional Scripts
+## Project Strengths
 
-```powershell
-python .\analyze_dataset.py
-python .\prepare_training_dataset.py
-python .\train_classifier.py
-python .\eduagent_full.py
-python .\example_retriever.py
+- Demonstrates a complete adaptive learning loop
+- Has real learner memory instead of stateless chat
+- Includes both tutor and evaluator behavior
+- Uses dataset retrieval for grounding/reference
+- Provides visual progress tracking
+- Shows internal system intelligence for academic evaluation
+- Keeps the UI organized with learner-facing and research-facing panels separated
+
+---
+
+## Future Improvements
+
+Possible next steps:
+
+- Add richer mastery scoring over time
+- Add per-topic learning paths
+- Add exportable learner reports
+- Add instructor/admin analytics
+- Add better topic taxonomy
+- Add evaluation history charts
+- Add a custom frontend for even more polished production UI
+- Add unit tests for profile update logic and callback return contracts
+
+---
+
+## Tech Stack
+
+- Python
+- Gradio
+- Groq API
+- SQLite
+- Matplotlib
+- Pandas
+- Scikit-learn
+- Transformers
+- PyTorch
+- Passlib
+
+---
+
+## Summary
+
+EduAgent is an adaptive AI/ML tutor prototype with a complete learning loop:
+
+```text
+Question -> Classification -> Topic Detection -> Retrieval -> Tutor Answer -> Follow-up -> Evaluation -> Memory Update -> Dashboard Update
 ```
 
+It is built to be understandable, demo-ready, and academically presentable while preserving a modular backend architecture.

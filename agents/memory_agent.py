@@ -42,6 +42,7 @@ def ensure_profile_structure(profile: Dict) -> Dict:
     profile.setdefault("mastery", {})
     profile.setdefault("used_explanations", {})
     profile.setdefault("recommended_next_topics", [])
+    profile.setdefault("last_evaluation", {})
     return profile
 
 
@@ -105,6 +106,89 @@ def update_profile_after_evaluation(profile: Dict, topic: str, evaluation: Dict)
 
     return profile
 
+def update_last_evaluation(profile: dict, topic: str, evaluation: dict) -> dict:
+    """
+    Store the most recent evaluation result so the Tutor Agent can adapt next time.
+    """
+    profile = ensure_profile_structure(profile)
+    profile["last_evaluation"] = {
+        "topic": topic,
+        "understanding_level": evaluation.get("understanding_level", "partial"),
+        "weak_concepts": evaluation.get("weak_concepts", []),
+        "feedback": evaluation.get("feedback", ""),
+        "recommended_action": evaluation.get("recommended_action", "give more practice"),
+    }
+    return profile
+
+
+def build_evaluation_strategy_hint(profile: dict, topic: str) -> str:
+    """
+    Build a tutoring strategy hint from the most recent evaluator output.
+    Only apply if the last evaluation belongs to the same topic.
+    """
+    profile = ensure_profile_structure(profile)
+
+    last_eval = profile.get("last_evaluation", {})
+    if not last_eval:
+        return ""
+
+    if last_eval.get("topic") != topic:
+        return ""
+
+    understanding = last_eval.get("understanding_level", "partial")
+    weak_concepts = last_eval.get("weak_concepts", [])
+    action = last_eval.get("recommended_action", "")
+
+    hints = []
+
+    if understanding == "poor":
+        hints.append(
+            "Teaching mode: remedial. "
+            "The learner did not understand the previous explanation. "
+            "Do NOT repeat the same analogy-driven explanation. "
+            "Re-teach the concept from scratch using very simple wording, "
+            "one tiny concrete example, and a short step-by-step explanation."
+        )
+    elif understanding == "partial":
+        hints.append(
+            "Teaching mode: clarification. "
+            "The learner understood partially. "
+            "Do not repeat the whole answer. "
+            "Briefly restate the core idea, then focus on the confusing part with one clear example."
+        )
+    elif understanding == "good":
+        hints.append(
+            "Teaching mode: advance. "
+            "The learner understood the previous explanation well. "
+            "Do not repeat the full beginner introduction. "
+            "Give a slightly deeper explanation and connect it to the next related concept."
+        )
+    else:
+        hints.append("Teaching mode: default.")
+
+    if weak_concepts:
+        hints.append(
+            f"Focus mainly on these weak concepts first: {', '.join(weak_concepts)}."
+        )
+
+    if action == "give easier example":
+        hints.append(
+            "Use one very easy real-world or numeric example."
+        )
+    elif action == "re-explain":
+        hints.append(
+            "Explain from scratch in the simplest possible way."
+        )
+    elif action == "give more practice":
+        hints.append(
+            "After explaining, add one short practice-style check."
+        )
+    elif action == "advance":
+        hints.append(
+            "After the explanation, connect to the next topic."
+        )
+
+    return " ".join(hints)
 
 def record_used_explanation(profile: Dict, topic: str, explanation_tag: str) -> Dict:
     """

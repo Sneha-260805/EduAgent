@@ -36,11 +36,11 @@ def authenticate_user(identifier, password):
     }, "Login successful."
 
 
-def signup_user(name, email, password):
+def signup_user(name, email, password, username=None):
     """
     Backward-compatible wrapper used by app.main.
     """
-    return register_user(name=name, username=None, email=email, password=password)
+    return register_user(name=name, username=username, email=email, password=password)
 
 
 def login_user(email, password):

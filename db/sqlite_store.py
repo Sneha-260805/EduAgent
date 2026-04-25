@@ -42,6 +42,13 @@ def init_db():
         )
         """
     )
+    cursor.execute("PRAGMA table_info(users)")
+    user_cols = {row["name"] for row in cursor.fetchall()}
+    if "username" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN username TEXT")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+    if "created_at" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
 
     # -----------------------------
     # profiles table
@@ -61,11 +68,21 @@ def init_db():
             mastery TEXT DEFAULT '{}',
             used_explanations TEXT DEFAULT '{}',
             recommended_next_topics TEXT DEFAULT '[]',
-
+            last_evaluation TEXT DEFAULT '{}',
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
         """
     )
+    cursor.execute("PRAGMA table_info(profiles)")
+    profile_cols = {row["name"] for row in cursor.fetchall()}
+    if "recommended_next_topics" not in profile_cols:
+        cursor.execute(
+            "ALTER TABLE profiles ADD COLUMN recommended_next_topics TEXT DEFAULT '[]'"
+        )
+    if "last_evaluation" not in profile_cols:
+        cursor.execute(
+            "ALTER TABLE profiles ADD COLUMN last_evaluation TEXT DEFAULT '{}'"
+        )
 
     conn.commit()
     conn.close()

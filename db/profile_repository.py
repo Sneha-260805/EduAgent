@@ -41,7 +41,8 @@ def create_profile_if_missing(user_id: int):
             "weak_areas": {},
             "mastery": {},
             "used_explanations": {},
-            "recommended_next_topics": []
+            "recommended_next_topics": [],
+            "last_evaluation": {}
         })
 
         cursor.execute(
@@ -57,9 +58,10 @@ def create_profile_if_missing(user_id: int):
                 weak_areas,
                 mastery,
                 used_explanations,
-                recommended_next_topics
+                recommended_next_topics,
+                last_evaluation
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -73,6 +75,7 @@ def create_profile_if_missing(user_id: int):
                 json.dumps(default_profile["mastery"]),
                 json.dumps(default_profile["used_explanations"]),
                 json.dumps(default_profile["recommended_next_topics"]),
+                json.dumps(default_profile["last_evaluation"])
             )
         )
 
@@ -116,6 +119,7 @@ def load_profile(user_id: int) -> dict:
         "mastery": _safe_json_load(row["mastery"], {}),
         "used_explanations": _safe_json_load(row["used_explanations"], {}),
         "recommended_next_topics": _safe_json_load(row["recommended_next_topics"], []),
+        "last_evaluation": _safe_json_load(row["last_evaluation"], {})
     }
 
     profile = ensure_profile_structure(profile)
@@ -145,8 +149,11 @@ def save_profile(user_id: int, profile: dict):
             weak_areas = ?,
             mastery = ?,
             used_explanations = ?,
-            recommended_next_topics = ?
+            recommended_next_topics = ?,
+            last_evaluation = ?
+
         WHERE user_id = ?
+        
         """,
         (
             profile["sessions"],
@@ -159,6 +166,7 @@ def save_profile(user_id: int, profile: dict):
             json.dumps(profile["mastery"]),
             json.dumps(profile["used_explanations"]),
             json.dumps(profile["recommended_next_topics"]),
+            json.dumps(profile["last_evaluation"]),
             user_id,
         )
     )
