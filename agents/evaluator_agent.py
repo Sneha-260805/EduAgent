@@ -1,8 +1,48 @@
 import json
-from groq import Groq
-from config.settings import GROQ_API_KEY, MODEL_NAME
+import re
+from typing import Literal
 
-client = Groq(api_key=GROQ_API_KEY)
+from pydantic import BaseModel, Field, ValidationError
+
+from agents.llm_client import complete_chat
+
+
+class EvaluationResult(BaseModel):
+    understanding_level: Literal["good", "partial", "poor"] = "partial"
+    weak_concepts: list[str] = Field(default_factory=list)
+    feedback: str = ""
+    recommended_action: Literal[
+        "advance",
+        "re-explain",
+        "give easier example",
+        "give more practice",
+    ] = "give more practice"
+
+
+def _extract_json_object(raw: str) -> dict:
+    """
+    Extract and parse the first JSON object from an LLM response.
+    Handles accidental markdown fences or short surrounding text.
+    """
+    raw = (raw or "").strip()
+    raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def _validate_evaluation(data: dict) -> dict:
+    try:
+        result = EvaluationResult.model_validate(data)
+    except AttributeError:
+        result = EvaluationResult.parse_obj(data)
+    return result.model_dump() if hasattr(result, "model_dump") else result.dict()
 
 
 def generate_followup_question(user_question: str, tutor_answer: str, level: str, topic: str) -> str:
@@ -30,12 +70,15 @@ Rules:
 - Return only the question.
 """
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}]
+    fallback_question = (
+        "In your own words, what is the main idea from the explanation?"
     )
 
-    return response.choices[0].message.content.strip()
+    return complete_chat(
+        [{"role": "user", "content": prompt}],
+        fallback=fallback_question,
+        temperature=0.2,
+    )
 
 
 def evaluate_followup_response(
@@ -83,28 +126,21 @@ Rules:
 - Return valid JSON only.
 """
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}]
+    raw = complete_chat(
+        [{"role": "user", "content": prompt}],
+        fallback="",
+        temperature=0.0,
     )
 
-    raw = response.choices[0].message.content.strip()
-
     try:
-        result = json.loads(raw)
-    except Exception:
-        # Safe fallback if LLM returns non-JSON
+        result = _validate_evaluation(_extract_json_object(raw))
+    except (json.JSONDecodeError, ValidationError, ValueError, TypeError):
+        # Safe fallback if the LLM/API returns invalid or non-JSON content.
         result = {
             "understanding_level": "partial",
             "weak_concepts": [],
             "feedback": "Could not reliably parse the learner evaluation. Review the learner response manually.",
             "recommended_action": "give more practice"
         }
-
-    # Extra safety
-    result.setdefault("understanding_level", "partial")
-    result.setdefault("weak_concepts", [])
-    result.setdefault("feedback", "")
-    result.setdefault("recommended_action", "give more practice")
 
     return result

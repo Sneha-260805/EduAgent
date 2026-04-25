@@ -1,12 +1,8 @@
-from groq import Groq
-
-from config.settings import GROQ_API_KEY, MODEL_NAME
 from ml.classifier import predict_level
 from ml.topic_detector import detect_best_topic
 from ml.retriever import retrieve_examples, df as RETRIEVER_DF
 from agents.memory_agent import build_memory_hint, build_evaluation_strategy_hint
-
-client = Groq(api_key=GROQ_API_KEY)
+from agents.llm_client import complete_chat
 
 
 def format_examples(examples_df):
@@ -53,7 +49,7 @@ Mode-specific instructions:
 - Focus on one main idea first before adding detail.
 - Avoid abstract definitions unless absolutely necessary.
 - Avoid repeating the same explanation style or analogy used earlier for this topic.
-- Start with: "Let’s simplify it completely."
+- Start with: "Let's simplify it completely."
 """
     elif teaching_mode == "clarification":
         return """
@@ -111,7 +107,7 @@ Learner memory hint:
 Recent evaluator strategy hint:
 {evaluation_strategy_hint if evaluation_strategy_hint else "No recent evaluation strategy available for this topic."}
 
-Reference examples for style guidance only:
+Retrieved dataset examples:
 {examples_text}
 
 General instructions:
@@ -119,8 +115,9 @@ General instructions:
 - For beginner: use simple words, intuition, and easy examples.
 - For intermediate: explain clearly with moderate detail and 1-2 key technical terms.
 - For advanced: give a deeper, more technical explanation.
-- Do not copy the examples directly.
-- Use the examples only to match explanation style and difficulty.
+- Treat retrieved examples as supporting context, not as guaranteed ground truth.
+- Use relevant examples to ground the explanation style and topic coverage.
+- Do not copy the retrieved examples directly.
 - Use learner memory to avoid repeating the same explanation style.
 - If weak areas are listed, address them explicitly.
 - If recent evaluator strategy exists, adapt the answer accordingly.
@@ -131,10 +128,15 @@ General instructions:
 Now answer the student's question.
 """
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}]
+    fallback_answer = (
+        "I could not reach the tutor model reliably right now. "
+        "Please try asking again in a moment. Your question was still classified "
+        f"as {level} and mapped to the topic {topic}."
     )
 
-    answer = response.choices[0].message.content.strip()
+    answer = complete_chat(
+        [{"role": "user", "content": prompt}],
+        fallback=fallback_answer,
+        temperature=0.25,
+    )
     return level, confidence, topic, examples, answer

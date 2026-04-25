@@ -11,4 +11,4 @@ seaborn
 wordcloud
 python-dotenv
 passlib
-pymongo
+pydantic

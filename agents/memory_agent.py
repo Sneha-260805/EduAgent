@@ -1,6 +1,19 @@
 from typing import Dict, List
 
 
+MASTERY_INITIAL_SCORE = 0.5
+MASTERY_DELTA_GOOD = 0.10
+MASTERY_DELTA_PARTIAL = -0.05
+MASTERY_DELTA_POOR = -0.15
+
+
+def _safe_mastery_score(value, default: float = MASTERY_INITIAL_SCORE) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def ensure_profile_structure(profile: Dict) -> Dict:
     """
     Ensure all expected keys exist in the learner profile.
@@ -68,24 +81,29 @@ def update_profile_after_question(profile: Dict, topic: str, level: str) -> Dict
 def update_profile_after_evaluation(profile: Dict, topic: str, evaluation: Dict) -> Dict:
     """
     Update weak areas and mastery based on learner's follow-up response evaluation.
+
+    Mastery is currently a simple heuristic score, not a formal cognitive model
+    such as Bayesian Knowledge Tracing. The deltas are intentionally named so
+    they can be tuned or replaced later without hiding "magic numbers" inside
+    the update logic.
     """
     profile = ensure_profile_structure(profile)
 
     profile["weak_areas"].setdefault(topic, [])
-    profile["mastery"].setdefault(topic, 0.5)
+    profile["mastery"].setdefault(topic, MASTERY_INITIAL_SCORE)
 
     understanding = evaluation.get("understanding_level", "partial")
     weak_concepts = evaluation.get("weak_concepts", [])
 
     # Update mastery score
-    current_mastery = profile["mastery"].get(topic, 0.5)
+    current_mastery = _safe_mastery_score(profile["mastery"].get(topic, MASTERY_INITIAL_SCORE))
 
     if understanding == "good":
-        current_mastery = min(1.0, current_mastery + 0.10)
+        current_mastery = min(1.0, current_mastery + MASTERY_DELTA_GOOD)
     elif understanding == "partial":
-        current_mastery = max(0.0, current_mastery - 0.05)
+        current_mastery = max(0.0, current_mastery + MASTERY_DELTA_PARTIAL)
     else:  # poor
-        current_mastery = max(0.0, current_mastery - 0.15)
+        current_mastery = max(0.0, current_mastery + MASTERY_DELTA_POOR)
 
     profile["mastery"][topic] = round(current_mastery, 2)
 
@@ -213,7 +231,7 @@ def build_memory_hint(profile: Dict, topic: str) -> str:
 
     topic_count = profile["topic_counts"].get(topic, 0)
     weak_areas = profile["weak_areas"].get(topic, [])
-    mastery = profile["mastery"].get(topic, 0.5)
+    mastery = _safe_mastery_score(profile["mastery"].get(topic, MASTERY_INITIAL_SCORE))
     used_explanations = profile["used_explanations"].get(topic, [])
 
     if topic_count > 1:
@@ -264,8 +282,12 @@ def recommend_next_topics(profile: Dict, current_topic: str = "") -> List[str]:
             recommendations.append(topic)
 
     # Then add low-mastery topics
-    low_mastery_topics = sorted(mastery.items(), key=lambda x: x[1])
+    low_mastery_topics = sorted(
+        mastery.items(),
+        key=lambda item: _safe_mastery_score(item[1], default=1.0),
+    )
     for topic, score in low_mastery_topics:
+        score = _safe_mastery_score(score, default=1.0)
         if score < 0.6 and topic not in recommendations and topic != current_topic:
             recommendations.append(topic)
 

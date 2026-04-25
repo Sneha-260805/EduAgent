@@ -2,10 +2,11 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from config.settings import DATASET_FILE
-from ml.topic_detector import clean_text, detect_best_topic
+from ml.topic_detector import clean_text, detect_best_topic, expand_topic_aliases
 
 
 df = pd.read_csv(DATASET_FILE)
+_RETRIEVAL_INDEX_CACHE = {}
 
 
 def filter_by_level(df_level, level):
@@ -38,11 +39,15 @@ def question_complexity_penalty(text):
     return penalty
 
 
-def retrieve_examples(user_question, level, top_n=2):
-    level = str(level).strip().lower()
-    user_question_clean = clean_text(user_question)
+def _retrieval_cache_key(level: str, topic: str | None):
+    return (
+        len(df),
+        str(level).strip().lower(),
+        str(topic).strip().lower() if topic is not None else "",
+    )
 
-    best_topic = detect_best_topic(user_question, level, df)
+
+def _build_retrieval_index(level: str, best_topic: str | None):
     filtered = df[df["level"].astype(str).str.lower() == level].copy()
 
     if best_topic is not None:
@@ -53,7 +58,7 @@ def retrieve_examples(user_question, level, top_n=2):
             filtered = topic_filtered
 
     if len(filtered) == 0:
-        return pd.DataFrame(columns=["question", "answer", "level", "topic"])
+        return filtered, None, None
 
     filtered = filter_by_level(filtered, level)
 
@@ -66,23 +71,50 @@ def retrieve_examples(user_question, level, top_n=2):
             if len(topic_filtered) > 0:
                 filtered = topic_filtered
 
+    if len(filtered) == 0:
+        return filtered, None, None
+
     filtered["clean_question"] = filtered["question"].apply(clean_text)
-
-    corpus = [user_question_clean] + filtered["clean_question"].tolist()
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(corpus)
-
-    user_vec = tfidf_matrix[0:1]
-    dataset_vecs = tfidf_matrix[1:]
-
-    sims = cosine_similarity(user_vec, dataset_vecs).flatten()
-    filtered["similarity"] = sims
-
     filtered["penalty"] = filtered["question"].apply(question_complexity_penalty)
-    filtered["final_score"] = filtered["similarity"] - filtered["penalty"]
 
-    filtered = filtered.sort_values(by="final_score", ascending=False)
-    top_examples = filtered.head(top_n).copy()
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words="english")
+    dataset_matrix = vectorizer.fit_transform(filtered["clean_question"].tolist())
+    return filtered.reset_index(drop=True), vectorizer, dataset_matrix
+
+
+def get_retrieval_index(level: str, topic: str | None):
+    key = _retrieval_cache_key(level, topic)
+    if key not in _RETRIEVAL_INDEX_CACHE:
+        _RETRIEVAL_INDEX_CACHE[key] = _build_retrieval_index(level, topic)
+    return _RETRIEVAL_INDEX_CACHE[key]
+
+
+def retrieve_examples(user_question, level, top_n=2):
+    """
+    Retrieve examples using a cached lexical retrieval index.
+
+    This is intentionally described as TF-IDF example retrieval, not full dense
+    vector RAG. The index is built once per level/topic and reused across
+    queries to avoid repeated vectorizer fitting.
+    """
+    level = str(level).strip().lower()
+    user_question_clean = expand_topic_aliases(clean_text(user_question))
+
+    best_topic = detect_best_topic(user_question, level, df)
+    filtered, vectorizer, dataset_vecs = get_retrieval_index(level, best_topic)
+
+    if len(filtered) == 0 or vectorizer is None or dataset_vecs is None:
+        return pd.DataFrame(columns=["question", "answer", "level", "topic"])
+
+    user_vec = vectorizer.transform([user_question_clean])
+    sims = cosine_similarity(user_vec, dataset_vecs).flatten()
+    scored = filtered.copy()
+    scored["similarity"] = sims
+
+    scored["final_score"] = scored["similarity"] - scored["penalty"]
+
+    scored = scored.sort_values(by="final_score", ascending=False)
+    top_examples = scored.head(top_n).copy()
 
     if len(top_examples) == 0:
         fallback = df[df["level"].astype(str).str.lower() == level].copy()

@@ -24,12 +24,30 @@ The main goal is to demonstrate a full learning loop:
 - Dataset-backed example retrieval from `eduagent_dataset.csv`
 - Groq-powered Tutor Agent for level-aware explanations
 - Evaluator Agent for follow-up questions and understanding checks
+- Shared LLM client with timeout, retry, and fallback behavior
+- Pydantic-validated evaluator output parsing
 - Memory Agent for learner state, weak areas, mastery, and recommendations
 - Dark theme Gradio UI designed for a project demo or professor presentation
 - Two-column workspace with a chat area and organized learner dashboard
 - Tabbed dashboard sections to avoid clutter
 - Matplotlib progress charts with dark theme styling
 - System Insights / Research panel for showing internal AI pipeline signals
+
+---
+
+## Recent Reliability Improvements
+
+Several earlier prototype weaknesses have been addressed directly:
+
+- The classifier no longer uses broad hardcoded difficulty override lists after prediction. It uses the trained model result, a narrow beginner-intent calibration for definition/simple-explanation questions, and a low-confidence fallback to `intermediate`.
+- Topic detection and example retrieval now reuse cached TF-IDF indexes instead of fitting a new vectorizer from scratch on every query.
+- Tutor and evaluator Groq calls now go through a shared LLM client with timeout, retries, logging, and graceful fallback text.
+- Evaluator JSON is validated with Pydantic before it updates learner memory.
+- Mastery scoring constants are named and documented as heuristics.
+- MongoDB placeholder code and `pymongo` dependency were removed because the active project uses SQLite.
+- A lightweight qualitative evaluation script was added for comparing tutor behavior across beginner, advanced, and memory-influenced cases.
+
+Important honesty note: retrieval is currently cached TF-IDF example retrieval, not a dense-vector FAISS/Chroma RAG pipeline. The project should be presented as retrieval-assisted adaptive tutoring. A semantic vector store remains a strong future upgrade.
 
 ---
 
@@ -138,6 +156,7 @@ EduAgent/
     main.py
     ui.py
   agents/
+    llm_client.py
     tutor_agent.py
     evaluator_agent.py
     memory_agent.py
@@ -152,9 +171,9 @@ EduAgent/
   db/
     sqlite_store.py
     profile_repository.py
-    mongo_store.py
   config/
     settings.py
+  evaluate_pipeline_quality.py
   eduagent_dataset.csv
   difficulty_classifier/
   requirements.txt
@@ -209,6 +228,19 @@ Responsibilities:
 - Builds System Insights markdown
 - Wires backend outputs into the UI components
 
+### `agents/llm_client.py`
+
+Shared LLM client wrapper.
+
+Responsibilities:
+
+- Calls Groq chat completions
+- Applies timeout configuration
+- Retries transient failures
+- Logs failures
+- Returns fallback text when configured
+- Prevents temporary LLM/API failures from crashing the UI
+
 ### `agents/tutor_agent.py`
 
 The Tutor Agent.
@@ -221,7 +253,7 @@ Responsibilities:
 - Reads memory hints from the learner profile
 - Reads evaluator strategy hints from the most recent evaluation
 - Builds the tutor prompt
-- Calls Groq to generate the final answer
+- Calls Groq through the shared retry/fallback LLM client
 
 The Tutor Agent adapts its explanation style based on:
 
@@ -240,6 +272,7 @@ Responsibilities:
 
 - Generates one follow-up question after the tutor answer
 - Evaluates the learner's response to the follow-up
+- Validates evaluator JSON with Pydantic before returning it to the memory update flow
 - Returns structured evaluation data:
   - `understanding_level`
   - `weak_concepts`
@@ -275,6 +308,7 @@ Responsibilities:
 - Stores the last evaluation
 - Builds tutor memory hints
 - Builds evaluator strategy hints
+- Uses documented heuristic mastery constants for prototype scoring
 
 This is the part that makes EduAgent adaptive across turns and sessions.
 
@@ -287,7 +321,10 @@ Responsibilities:
 - Loads the trained classifier from `difficulty_classifier/`
 - Predicts the learner question level
 - Returns confidence scores
-- Applies guardrails for more reliable level prediction
+- Applies a narrow beginner-intent calibration for definition/simple-explanation prompts
+- Falls back to `intermediate` when classifier confidence is low
+
+The classifier does not use broad keyword-based difficulty overrides after prediction. The remaining calibration is intentionally narrow and documented so prompts like "what is a large language model?" are treated as beginner questions unless the learner asks for advanced analysis.
 
 ### `ml/topic_detector.py`
 
@@ -296,7 +333,8 @@ Topic detection layer.
 Responsibilities:
 
 - Cleans and normalizes question text
-- Compares learner question with dataset topics
+- Builds and reuses a cached TF-IDF topic index
+- Compares learner questions with dataset topics
 - Returns the most relevant topic
 
 ### `ml/retriever.py`
@@ -307,8 +345,11 @@ Responsibilities:
 
 - Loads `eduagent_dataset.csv`
 - Filters by predicted level and detected topic
+- Builds and reuses cached TF-IDF retrieval indexes by level/topic
 - Ranks examples by relevance
-- Returns examples used as style/reference guidance for the tutor
+- Returns examples used as supporting context for the tutor
+
+This is lexical retrieval, not dense semantic retrieval. It is intentionally documented that way.
 
 ### `auth/auth_service.py`
 
@@ -353,6 +394,17 @@ Responsibilities:
 - Loads learner profiles
 - Saves learner profiles
 - Safely serializes/deserializes JSON profile fields
+
+### `evaluate_pipeline_quality.py`
+
+Lightweight qualitative evaluation harness.
+
+Responsibilities:
+
+- Runs selected learner scenarios through the tutor pipeline
+- Records predicted level, confidence, detected topic, retrieved examples, and tutor answer
+- Writes JSONL output for manual comparison
+- Helps evaluate whether the tutor changes behavior across beginner, advanced, and memory-influenced cases
 
 ---
 
@@ -498,9 +550,11 @@ Create a `.env` file in the project root:
 ```text
 GROQ_API_KEY=your_groq_api_key_here
 MODEL_NAME=your_groq_model_name_here
+LLM_TIMEOUT_SECONDS=30
+LLM_MAX_RETRIES=2
 ```
 
-If `MODEL_NAME` is already defined in `config/settings.py`, only `GROQ_API_KEY` may be required.
+Only `GROQ_API_KEY` is required. `MODEL_NAME`, `LLM_TIMEOUT_SECONDS`, and `LLM_MAX_RETRIES` are optional overrides.
 
 You can also set the API key in PowerShell:
 
@@ -536,7 +590,7 @@ pip install -r requirements.txt
 If you prefer manual installation:
 
 ```powershell
-pip install pandas numpy scikit-learn transformers datasets torch gradio groq matplotlib seaborn wordcloud python-dotenv passlib pymongo
+pip install pandas numpy scikit-learn transformers datasets torch gradio groq matplotlib seaborn wordcloud python-dotenv passlib pydantic
 ```
 
 ### 4. Configure Environment
@@ -576,6 +630,14 @@ python .\test_classifier.py
 python .\pipeline_test.py
 ```
 
+Run a qualitative LLM pipeline evaluation:
+
+```powershell
+python .\evaluate_pipeline_quality.py
+```
+
+This writes JSONL records to `evaluation_runs/pipeline_eval.jsonl`. Review the output manually to compare whether the answer style changes across beginner, advanced, and memory-influenced cases.
+
 ---
 
 ## Common Issues
@@ -611,10 +673,21 @@ Restart the app so `init_db()` runs and initializes the required SQLite tables.
 - Demonstrates a complete adaptive learning loop
 - Has real learner memory instead of stateless chat
 - Includes both tutor and evaluator behavior
-- Uses dataset retrieval for grounding/reference
+- Uses cached dataset retrieval for supporting examples
 - Provides visual progress tracking
 - Shows internal system intelligence for academic evaluation
 - Keeps the UI organized with learner-facing and research-facing panels separated
+- Includes retry/fallback handling for LLM calls
+- Validates evaluator JSON before updating learner memory
+
+---
+
+## Current Limitations
+
+- Retrieval is cached TF-IDF example retrieval, not dense-vector FAISS/Chroma retrieval.
+- Mastery is a documented heuristic score, not a validated pedagogical model.
+- The qualitative evaluation script helps compare outputs, but it is not a full automated LLM evaluation benchmark.
+- The Gradio UI is polished for a demo, but a production product would likely use a custom frontend.
 
 ---
 
@@ -623,11 +696,14 @@ Restart the app so `init_db()` runs and initializes the required SQLite tables.
 Possible next steps:
 
 - Add richer mastery scoring over time
+- Replace heuristic mastery with a formal learner model such as Bayesian Knowledge Tracing
+- Replace TF-IDF retrieval with a semantic vector store such as FAISS or ChromaDB
 - Add per-topic learning paths
 - Add exportable learner reports
 - Add instructor/admin analytics
 - Add better topic taxonomy
 - Add evaluation history charts
+- Add automated LLM response quality evaluation
 - Add a custom frontend for even more polished production UI
 - Add unit tests for profile update logic and callback return contracts
 
@@ -645,6 +721,7 @@ Possible next steps:
 - Transformers
 - PyTorch
 - Passlib
+- Pydantic
 
 ---
 
